@@ -6,13 +6,15 @@ Brewnicle is a Go/Charm terminal UI for discovering packages recently added to t
 
 `brew update` advertises only the difference from the previous local update. Homebrew does not retain that advertisement history. Brewnicle instead combines the current non-disabled [formula](https://formulae.brew.sh/api/formula.json) and [cask](https://formulae.brew.sh/api/cask.json) catalogs with the earliest matching add commit reachable in the official `homebrew-core` and `homebrew-cask` Git histories.
 
-Only current, non-disabled packages are listed. Removed packages and third-party taps are out of scope. A font is a cask whose token starts with `font-`; it is shown once as `font` and installed with `--cask`. If a package’s earlier history cannot be resolved, its date is unknown and it appears only under `all`.
+Only current, non-disabled packages are listed. Removed packages and third-party taps are out of scope. The `all` view contains every enabled formula and cask returned by the current official catalogs, so its count changes as Homebrew changes. A font is a cask whose token starts with `font-`; it is shown once as `font` and installed with `--cask`. If a package’s earlier history cannot be resolved, its date is unknown and it appears only under `all`.
+
+History scanning recognizes Homebrew's current strict package layouts, including `Formula/lib/<name>.rb` formulae and `Casks/font/font-<bucket>/<token>.rb` font casks, in addition to legacy and single-character bucket layouts. Live compatibility tests fail if enabled catalog entries move to an unsupported path family.
 
 ## First run and cache
 
 The first run downloads both API catalogs and app-owned, blob-filter-requested Git history caches. Homebrew’s histories are large: initialization can require substantial network transfer, disk space, and time even though source blobs are not requested. Git servers or clients may ignore filtering. Brewnicle reports phase-level progress and does not promise an exact size or duration.
 
-The app never modifies Homebrew’s own taps. It stores an SQLite index and bare Git caches under the OS user-cache directory (`~/Library/Caches/brewnicle` on macOS, normally `$XDG_CACHE_HOME/brewnicle` or `~/.cache/brewnicle` on Linux). Later starts render the cached index immediately. At startup only, an index at least 24 hours old refreshes in the background; `r` forces refresh. A failed refresh leaves the prior index usable. The app can browse offline after a successful bootstrap.
+The app never modifies Homebrew’s own taps. It stores an SQLite index and bare Git caches under the OS user-cache directory (`~/Library/Caches/brewnicle` on macOS, normally `$XDG_CACHE_HOME/brewnicle` or `~/.cache/brewnicle` on Linux). Later starts render the cached index immediately. At startup only, an index at least 24 hours old refreshes in the background; `r` forces refresh. A separate history-layout version also schedules one background refresh when a release improves date resolution, while leaving the older index visible and readable. A failed refresh leaves the prior index usable. The app can browse offline after a successful bootstrap.
 
 ## Keys
 
@@ -32,7 +34,7 @@ The app never modifies Homebrew’s own taps. It stores an SQLite index and bare
 
 Search and install confirmation own text keys, including `q` and `ctrl+c`; leave them with `esc`/`enter` or the displayed confirmation controls. The too-small screen keeps its explicit quit control. The default range is `30d`. If `brew` is unavailable, browsing and homepage actions remain usable while installation is visibly disabled. Installation never starts without confirmation. Formulae run `brew install NAME`; casks and fonts run `brew install --cask TOKEN`. Commands use direct argument vectors, never a shell. Bubble Tea yields the terminal to Homebrew for interactive output and restores the TUI afterward.
 
-Brewnicle preserves the terminal’s foreground/background and uses only theme-controlled ANSI accents. Set [`NO_COLOR`](https://no-color.org/) to disable optional color.
+Brewnicle strictly inherits the terminal’s foreground and background. It assigns no ANSI, RGB, adaptive, foreground, or background colors; bold text, reverse video, brackets, labels, and the `›` marker provide state cues. `NO_COLOR` remains supported but produces the same inherited-color policy.
 
 ## Requirements and usage
 

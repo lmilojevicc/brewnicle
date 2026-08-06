@@ -1,6 +1,7 @@
 package store
 
 const SchemaVersion = "1"
+const HistoryLayoutVersion = 2
 const schema = `
 PRAGMA journal_mode=DELETE;
 CREATE TABLE packages (

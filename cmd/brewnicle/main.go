@@ -77,7 +77,7 @@ func newApplicationWithHooks(ctx context.Context, cacheRoot string, hooks applic
 	stale := false
 	bootstrapDiagnostic := ""
 	if loadErr == nil {
-		stale = refresh.Stale(snapshot.RefreshedAt, hooks.now())
+		stale = refresh.NeedsRefresh(snapshot, hooks.now())
 	} else if _, statErr := os.Stat(paths.Index); statErr == nil {
 		preserved, preserveErr := hooks.preserveInvalid(paths.Index, hooks.now())
 		if preserveErr != nil {

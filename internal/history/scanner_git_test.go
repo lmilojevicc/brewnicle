@@ -114,6 +114,52 @@ func TestScannerCaskFontFormerNameAndDeleteReadd(t *testing.T) {
 	}
 }
 
+func TestScannerCurrentLibAndFontPathsAppearInBoundedFilters(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+
+	coreFixture := newGitFixture(t)
+	libDir := filepath.Join(coreFixture.dir, "Formula", "lib")
+	if err := os.MkdirAll(libDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(libDir, "libjaylink.rb"), []byte("formula"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	coreFixture.run(nil, "add", ".")
+	coreFixture.commit("2026-07-27T12:00:00Z", "add lib formula")
+	coreEvents, err := (Scanner{Git: coreFixture.bin}).Scan(context.Background(), filepath.Join(coreFixture.dir, ".git"), "HEAD", RepoCore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	caskFixture := newGitFixture(t)
+	fontDir := filepath.Join(caskFixture.dir, "Casks", "font", "font-n")
+	if err := os.MkdirAll(fontDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fontDir, "font-nexon-lv2-gothic.rb"), []byte("font"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	caskFixture.run(nil, "add", ".")
+	caskFixture.commit("2026-08-05T12:00:00Z", "add font")
+	caskEvents, err := (Scanner{Git: caskFixture.bin}).Scan(context.Background(), filepath.Join(caskFixture.dir, ".git"), "HEAD", RepoCask)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	packages := []domain.Package{
+		{Name: "libjaylink", Kind: domain.KindFormula},
+		{Name: "font-nexon-lv2-gothic", Kind: domain.KindFont},
+	}
+	resolved := Resolve(packages, coreEvents, caskEvents, now)
+	if got := domain.Filter(resolved, domain.Range7D, "", now); len(got) != 1 || got[0].Name != "font-nexon-lv2-gothic" {
+		t.Fatalf("7d filter = %+v", got)
+	}
+	if got := domain.Filter(resolved, domain.Range30D, "", now); len(got) != 2 {
+		t.Fatalf("30d filter = %+v", got)
+	}
+}
+
 func TestScannerFailedGitCommand(t *testing.T) {
 	_, err := (Scanner{Git: filepath.Join(t.TempDir(), "missing-git")}).Scan(context.Background(), t.TempDir(), "HEAD", RepoCore)
 	if err == nil {

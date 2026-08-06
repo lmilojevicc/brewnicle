@@ -71,3 +71,7 @@ func (s Service) Run(ctx context.Context, emit func(Progress)) (store.PublishRes
 func Stale(refreshed, now time.Time) bool {
 	return !now.UTC().Before(refreshed.UTC().Add(24 * time.Hour))
 }
+
+func NeedsRefresh(snapshot store.Snapshot, now time.Time) bool {
+	return snapshot.HistoryLayoutVersion < store.HistoryLayoutVersion || Stale(snapshot.RefreshedAt, now)
+}

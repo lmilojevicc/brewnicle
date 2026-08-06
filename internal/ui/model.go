@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/milo/brewnicle/internal/domain"
 )
 
@@ -53,6 +54,14 @@ type Model struct {
 
 func New(packages []domain.Package, bootstrap, stale, noColor bool, deps Dependencies) Model {
 	in := textinput.New()
+	inherited := lipgloss.NewStyle()
+	in.PromptStyle = inherited
+	in.TextStyle = inherited
+	in.PlaceholderStyle = inherited
+	in.CompletionStyle = inherited
+	in.CursorStyle = inherited
+	in.Cursor.TextStyle = inherited
+	in.Cursor.Style = lipgloss.NewStyle().Reverse(true)
 	in.Prompt = "Search: "
 	in.CharLimit = 120
 	in.Width = 30

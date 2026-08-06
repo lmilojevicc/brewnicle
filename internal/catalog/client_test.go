@@ -13,10 +13,10 @@ import (
 func TestFetchNormalize(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "formula") {
-			w.Write([]byte(`[{"name":"ok","desc":"Needle","homepage":"https://example.test","oldnames":["old","bad name"]},{"name":"off","disabled":true},{"name":"bad name"}]`))
+			w.Write([]byte(`[{"name":"ok","desc":"Needle","homepage":"https://example.test","oldnames":["old","bad name"],"ruby_source_path":"Formula/o/ok.rb"},{"name":"off","disabled":true},{"name":"bad name"}]`))
 			return
 		}
-		w.Write([]byte(`[{"token":"font-maple","desc":"Font","homepage":"file:///bad","old_tokens":["font-old"]},{"token":"app","disabled":false}]`))
+		w.Write([]byte(`[{"token":"font-maple","desc":"Font","homepage":"file:///bad","old_tokens":["font-old"],"ruby_source_path":"Casks/font/font-m/font-maple.rb"},{"token":"app","disabled":false,"ruby_source_path":"Casks/a/app.rb"}]`))
 	}))
 	defer s.Close()
 	c := NewClient(s.Client())
@@ -32,8 +32,8 @@ func TestFetchNormalize(t *testing.T) {
 	if got.Packages[1].Kind != domain.KindFont || got.Packages[1].Homepage != "" {
 		t.Fatalf("%+v", got.Packages[1])
 	}
-	if len(got.Packages[0].FormerNames) != 1 {
-		t.Fatal(got.Packages[0].FormerNames)
+	if len(got.Packages[0].FormerNames) != 1 || got.Packages[0].SourcePath != "Formula/o/ok.rb" || got.Packages[1].SourcePath != "Casks/font/font-m/font-maple.rb" {
+		t.Fatal(got.Packages[0], got.Packages[1])
 	}
 }
 

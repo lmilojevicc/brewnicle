@@ -80,7 +80,7 @@ func (p Publisher) Publish(ctx context.Context, packages []domain.Package, refre
 		}
 	}
 	_ = stmt.Close()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO metadata(key,value) VALUES('schema_version',?),('last_successful_refresh',?)`, SchemaVersion, strconv.FormatInt(refreshed.UTC().Unix(), 10)); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO metadata(key,value) VALUES('schema_version',?),('last_successful_refresh',?),('history_layout_version',?)`, SchemaVersion, strconv.FormatInt(refreshed.UTC().Unix(), 10), strconv.Itoa(HistoryLayoutVersion)); err != nil {
 		tx.Rollback()
 		return PublishResult{}, err
 	}

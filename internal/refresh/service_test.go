@@ -54,3 +54,27 @@ func TestStaleBoundary(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func TestNeedsRefreshIncludesHistoryLayoutVersion(t *testing.T) {
+	now := time.Unix(100000, 0)
+	fresh := now.Add(-time.Hour)
+	for _, tc := range []struct {
+		name    string
+		version int
+		age     time.Time
+		want    bool
+	}{
+		{"legacy missing", 0, fresh, true},
+		{"old", store.HistoryLayoutVersion - 1, fresh, true},
+		{"current fresh", store.HistoryLayoutVersion, fresh, false},
+		{"future fresh", store.HistoryLayoutVersion + 1, fresh, false},
+		{"current stale", store.HistoryLayoutVersion, now.Add(-24 * time.Hour), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := store.Snapshot{RefreshedAt: tc.age, HistoryLayoutVersion: tc.version}
+			if got := NeedsRefresh(snapshot, now); got != tc.want {
+				t.Fatalf("NeedsRefresh()=%v want %v", got, tc.want)
+			}
+		})
+	}
+}

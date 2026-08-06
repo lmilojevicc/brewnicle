@@ -21,6 +21,7 @@ type Package struct {
 	AddedAt       *time.Time
 	InstallTarget string
 	FormerNames   []string
+	SourcePath    string
 	UpdatedAt     time.Time
 }
 

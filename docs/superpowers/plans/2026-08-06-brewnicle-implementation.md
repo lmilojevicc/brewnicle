@@ -110,9 +110,12 @@ These amendments supersede conflicting wording later in the generated plan:
      - Accept only these root-anchored layouts:
        - `Formula/<name>.rb`
        - `Formula/<one-letter-or-digit>/<name>.rb`
+       - `Formula/lib/<name>.rb`
        - `Casks/<token>.rb`
        - `Casks/<one-letter-or-digit>/<token>.rb`
-     - Reject deeper paths, unrelated roots, arbitrary Ruby files, invalid identifiers, and mismatched core/cask layouts.
+       - `Casks/font/font-<one-letter-or-digit>/<font-token>.rb`
+     - Require nested font tokens to begin with `font-`; reject other multi-character buckets, deeper paths, unrelated roots, arbitrary Ruby files, invalid identifiers, and mismatched core/cask layouts.
+     - Decode catalog `ruby_source_path` and keep an opt-in live compatibility test that maps every enabled current path back to its canonical identifier and kind without cloning history.
      - Run one bulk `git log` process per repository/ref rather than one process per package.
      - Request added paths and committer timestamps with explicit separators, `--diff-filter=A`, and rename detection disabled. Parse records strictly; tolerate irrelevant paths but abort on structurally malformed output.
      - Use `exec.CommandContext` so cancellation terminates the git process.
@@ -185,7 +188,7 @@ These amendments supersede conflicting wording later in the generated plan:
      - Use `database/sql` with `modernc.org/sqlite`.
      - Create the approved `packages` and `metadata` schema with composite `(kind, name)` primary key and indexes on `added_at` and `kind`.
      - Persist UTC Unix seconds; use SQL NULL for unresolved `added_at`.
-     - Store explicit schema version and last successful complete refresh.
+     - Store explicit schema version, last successful complete refresh, and a separate history-layout algorithm version. Legacy/malformed/older algorithm metadata remains readable but schedules one background refresh; current or future numeric versions do not refresh solely for this reason.
      - Keep database connections short-lived. Load all rows and metadata, then close the active connection before any later replacement.
      - Implement publication by:
        1. Creating a uniquely named sibling temporary DB with mode `0600`.
@@ -350,18 +353,17 @@ These amendments supersede conflicting wording later in the generated plan:
      - Render only a minimum-size message and quit hint when too small.
      - Show header tabs, query, counts, stale/refresh state; detail fields; exact install command; and context-aware footer.
      - Wrap/truncate using measured Lip Gloss cell widths so no line or total height exceeds the last `WindowSizeMsg`.
-     - Preserve terminal default foreground/background:
-       - Never set a full-screen background.
-       - Use only ANSI 0–15 accents.
-       - Use reverse video for selection.
-       - Construct styles without optional color when `NO_COLOR` is present.
-       - Keep warnings/focus/errors distinguishable through labels, borders, bold text, and reverse video.
+     - Strictly inherit terminal foreground/background:
+       - Set no foreground or background colors in app-owned or visible Bubbles text-input styles.
+       - Do not use ANSI slots, ANSI-256, RGB, or adaptive colors.
+       - Use reverse video plus a `›` marker for selection and bold/brackets for the active range.
+       - Keep warnings/focus/errors distinguishable through labels, borders, bold text, and reverse video in normal and `NO_COLOR` modes.
      - Keep relative-age formatting deterministic by injecting `now`.
    - Tests:
      - Golden snapshots with color disabled for every required state.
      - Width/height assertions for exact breakpoint boundaries and long Unicode descriptions.
-     - NO_COLOR output contains no optional color escape sequences.
-     - Selected rows remain distinguishable through reverse video or test-visible markers.
+     - Structural style tests prove foreground/background are unset for normal and `NO_COLOR` models, including text-input and cursor styles.
+     - Selected rows remain distinguishable through reverse video and test-visible markers.
    - Acceptance:
      - `go test ./internal/ui`
      - `go test ./...`
@@ -564,8 +566,8 @@ Recommended implementation checkpoints:
 - **Corrupt-index handling:** Preserve the original file under a diagnostic suffix before rebuilding; do not repeatedly overwrite diagnostic evidence.
 - **Bubble Tea API/version drift:** Keep `ExecProcess` adaptation isolated in `internal/platform/tea.go` and verify compile/runtime behavior against the pinned version.
 - **Interactive Homebrew output:** Never capture unbounded install output. Yield the terminal and attach standard streams, then restore the TUI via callback.
-- **Terminal theme compliance:** Lip Gloss defaults can accidentally emit fixed colors/backgrounds. Never set a background, restrict optional accents to ANSI 0–15, and validate NO_COLOR/golden output.
+- **Terminal theme compliance:** Lip Gloss and Bubbles defaults can accidentally emit fixed colors/backgrounds. Explicitly clear component colors, set no app foreground/background, and validate inherited styles structurally in both normal and `NO_COLOR` modes.
 - **Unicode width and resizing:** Byte/string lengths do not equal terminal cell widths. Use Lip Gloss width measurement and test long/wide Unicode at exact breakpoints.
 - **Upstream schema drift:** Minimal JSON structs tolerate added fields, while status, size, required identifiers, and canonical formats remain validated. Live tests stay opt-in.
-- **Unknown font dates:** The deleted historical fonts repository is intentionally not required. Fonts without reachable cask history remain unknown and appear only in `all`.
+- **Unknown font dates:** Current nested font-cask paths are supported and live-validated. The deleted historical fonts repository is intentionally not required; fonts without reachable cask history still remain unknown and appear only in `all`.
 - **Scope expansion:** Do not add third-party taps, dependency views, installed-package management, release automation, a hosted index, or a real-install smoke test.

@@ -43,7 +43,7 @@ func normalizeFormulae(in []formulaJSON) ([]domain.Package, int) {
 			skipped++
 			continue
 		}
-		out = append(out, domain.Package{Name: f.Name, InstallTarget: f.Name, Kind: domain.KindFormula, Description: f.Description, Homepage: normalizeHomepage(f.Homepage), FormerNames: former(f.OldNames)})
+		out = append(out, domain.Package{Name: f.Name, InstallTarget: f.Name, Kind: domain.KindFormula, Description: f.Description, Homepage: normalizeHomepage(f.Homepage), FormerNames: former(f.OldNames), SourcePath: f.RubySourcePath})
 	}
 	return out, skipped
 }
@@ -63,7 +63,7 @@ func normalizeCasks(in []caskJSON) ([]domain.Package, int) {
 		if strings.HasPrefix(c.Token, "font-") {
 			kind = domain.KindFont
 		}
-		out = append(out, domain.Package{Name: c.Token, InstallTarget: c.Token, Kind: kind, Description: c.Description, Homepage: normalizeHomepage(c.Homepage), FormerNames: former(c.OldTokens)})
+		out = append(out, domain.Package{Name: c.Token, InstallTarget: c.Token, Kind: kind, Description: c.Description, Homepage: normalizeHomepage(c.Homepage), FormerNames: former(c.OldTokens), SourcePath: c.RubySourcePath})
 	}
 	return out, skipped
 }

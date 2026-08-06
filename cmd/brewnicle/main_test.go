@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,19 +45,42 @@ func TestMissingIndexStartsBootstrapAfterVisibleFrame(t *testing.T) {
 func TestFreshAndStaleIndexStartupIntent(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		name      string
-		refreshed time.Time
-		stale     bool
+		name             string
+		refreshed        time.Time
+		metadataOverride *string
+		stale            bool
 	}{
-		{"fresh", now.Add(-23 * time.Hour), false},
-		{"stale", now.Add(-24 * time.Hour), true},
+		{"fresh current", now.Add(-23 * time.Hour), nil, false},
+		{"stale current", now.Add(-24 * time.Hour), nil, true},
+		{"fresh legacy", now.Add(-23 * time.Hour), stringPointer(""), true},
+		{"fresh old", now.Add(-23 * time.Hour), stringPointer(strconv.Itoa(store.HistoryLayoutVersion - 1)), true},
+		{"fresh future", now.Add(-23 * time.Hour), stringPointer(strconv.Itoa(store.HistoryLayoutVersion + 1)), false},
+		{"fresh invalid", now.Add(-23 * time.Hour), stringPointer("invalid"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "cache")
 			added := now.Add(-time.Hour)
 			packages := []domain.Package{{Name: "x", Kind: domain.KindFormula, InstallTarget: "x", AddedAt: &added, UpdatedAt: now}}
-			if _, err := (store.Publisher{Path: filepath.Join(root, "index.db")}).Publish(context.Background(), packages, tc.refreshed); err != nil {
+			indexPath := filepath.Join(root, "index.db")
+			if _, err := (store.Publisher{Path: indexPath}).Publish(context.Background(), packages, tc.refreshed); err != nil {
 				t.Fatal(err)
+			}
+			if tc.metadataOverride != nil {
+				db, err := sql.Open("sqlite", indexPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if *tc.metadataOverride == "" {
+					_, err = db.Exec(`DELETE FROM metadata WHERE key='history_layout_version'`)
+				} else {
+					_, err = db.Exec(`INSERT OR REPLACE INTO metadata(key,value) VALUES('history_layout_version',?)`, *tc.metadataOverride)
+				}
+				if closeErr := db.Close(); err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			m, err := newApplicationWithHooks(context.Background(), root, testHooks(now))
 			if err != nil || m.State() != ui.StateBrowse || m.Stale() != tc.stale || m.PendingRefresh() != tc.stale {
@@ -64,6 +89,8 @@ func TestFreshAndStaleIndexStartupIntent(t *testing.T) {
 		})
 	}
 }
+
+func stringPointer(value string) *string { return &value }
 
 func TestCorruptIndexIsPreservedWithVisibleDiagnostic(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "cache")

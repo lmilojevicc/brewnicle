@@ -29,11 +29,50 @@ func TestResponsiveViewsFitTerminalCellWidth(t *testing.T) {
 	}
 }
 
-func TestNoColorHasNoEscape(t *testing.T) {
-	m := New(uiPkgs(), false, false, true, Dependencies{})
-	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 20})
-	if strings.Contains(m.View(), "\x1b[3") {
-		t.Fatal("color escape")
+func TestStylesStrictlyInheritTerminalColors(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal", true: "no-color"}[noColor], func(t *testing.T) {
+			s := makeStyles(noColor)
+			for name, style := range map[string]lipgloss.Style{
+				"title": s.title, "accent": s.accent, "selected": s.selected,
+			} {
+				assertInheritedStyle(t, name, style)
+			}
+			if !s.title.GetBold() || !s.accent.GetBold() || !s.selected.GetReverse() {
+				t.Fatal("attribute-only title, active range, or selection cue missing")
+			}
+
+			m := New(uiPkgs(), false, false, noColor, Dependencies{})
+			for name, style := range map[string]lipgloss.Style{
+				"input prompt":        m.input.PromptStyle,
+				"input text":          m.input.TextStyle,
+				"input placeholder":   m.input.PlaceholderStyle,
+				"input completion":    m.input.CompletionStyle,
+				"input cursor legacy": m.input.CursorStyle,
+				"input cursor text":   m.input.Cursor.TextStyle,
+				"input cursor":        m.input.Cursor.Style,
+			} {
+				assertInheritedStyle(t, name, style)
+			}
+			if !m.input.Cursor.Style.GetReverse() {
+				t.Fatal("cursor lost its color-independent reverse cue")
+			}
+			m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 20})
+			view := m.View()
+			if !strings.Contains(view, "›") || !strings.Contains(view, "[30d]") {
+				t.Fatal("text selection cues missing")
+			}
+		})
+	}
+}
+
+func assertInheritedStyle(t *testing.T, name string, style lipgloss.Style) {
+	t.Helper()
+	if _, ok := style.GetForeground().(lipgloss.NoColor); !ok {
+		t.Errorf("%s sets foreground %T", name, style.GetForeground())
+	}
+	if _, ok := style.GetBackground().(lipgloss.NoColor); !ok {
+		t.Errorf("%s sets background %T", name, style.GetBackground())
 	}
 }
 

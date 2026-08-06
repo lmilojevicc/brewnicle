@@ -1,7 +1,7 @@
 # Brewnicle Design Specification
 
-**Date:** 2026-07-26  
-**Status:** Approved for implementation  
+**Date:** 2026-07-26
+**Status:** Approved for implementation
 **Go module:** `github.com/milo/brewnicle`
 
 ## 1. Summary
@@ -43,7 +43,7 @@ The first release does not include:
 
 ### 4.1 Current non-disabled catalog only
 
-The current formula and cask API responses are authoritative for membership, subject to excluding disabled entries. A record absent from the current catalog or marked with the API boolean field `disabled: true` is absent from Brewnicle even if it exists in git history. Records with `disabled: false` or an omitted `disabled` field remain eligible. This makes every displayed package currently installable as far as catalog status indicates and prevents stale history from appearing as installable software.
+The current formula and cask API responses are authoritative for membership, subject to excluding disabled entries. A record absent from the current catalog or marked with the API boolean field `disabled: true` is absent from Brewnicle even if it exists in git history. Records with `disabled: false` or an omitted `disabled` field remain eligible. This makes every displayed package currently installable as far as catalog status indicates and prevents stale history from appearing as installable software. The `all` count is therefore every enabled entry in the current official responses and varies as Homebrew changes; it is not the raw count including disabled entries.
 
 ### 4.2 Package kinds
 
@@ -175,12 +175,12 @@ These breakpoint values belong to the UI package as named constants and are fixe
 
 ### 5.7 Terminal-native styling
 
-Brewnicle preserves the terminal's default foreground and background. It does not paint a full-screen background and does not use RGB or 256-color literals.
+Brewnicle strictly inherits the terminal's default foreground and background. App-owned styles and visible component styles set no foreground or background colors: no ANSI palette slots, ANSI-256, RGB, or adaptive colors.
 
-- Optional accents use standard ANSI palette entries so the terminal theme controls their appearance.
-- The selected row uses reverse video.
-- Borders, spacing, and text weight carry meaning without color.
-- When `NO_COLOR` is present, optional color accents are disabled; selection, focus, warnings, and errors remain distinguishable through reverse video, labels, borders, and text weight.
+- The selected row uses reverse video plus a visible `›` marker.
+- The title and active range use bold text; brackets identify the active range independently of attributes.
+- Borders, spacing, labels, and text weight carry meaning without color.
+- `NO_COLOR` uses the same inherited-color policy; selection, focus, warnings, and errors remain distinguishable through reverse video, labels, borders, and text weight.
 
 ## 6. Architecture
 
@@ -207,7 +207,7 @@ Fetches and validates:
 - `https://formulae.brew.sh/api/formula.json`;
 - `https://formulae.brew.sh/api/cask.json`.
 
-It converts each eligible current API entry to a normalized catalog record containing identifier, kind, description, homepage, install target, and known former identifiers. Formula `name` and cask `token` are canonical identifiers. Entries whose API boolean field `disabled` is `true` are excluded before persistence; `disabled: false` or an omitted field remains eligible. Identifiers must match `[A-Za-z0-9][A-Za-z0-9+_.@-]*`. Missing descriptions become an empty string and render as `No description available`. A missing homepage or a value that does not parse as an absolute `http` or `https` URL becomes an empty string and disables `o`; homepage invalidity alone never drops an otherwise valid package. Malformed identifiers or entries without a canonical name/token are rejected. HTTP responses must be successful JSON, are limited to 64 MiB per response, and must be cancellable through context.
+It converts each eligible current API entry to a normalized catalog record containing identifier, kind, description, homepage, install target, known former identifiers, and the upstream `ruby_source_path` used for compatibility validation. Formula `name` and cask `token` are canonical identifiers. Entries whose API boolean field `disabled` is `true` are excluded before persistence; `disabled: false` or an omitted field remains eligible. Identifiers must match `[A-Za-z0-9][A-Za-z0-9+_.@-]*`. Missing descriptions become an empty string and render as `No description available`. A missing homepage or a value that does not parse as an absolute `http` or `https` URL becomes an empty string and disables `o`; homepage invalidity alone never drops an otherwise valid package. Malformed identifiers or entries without a canonical name/token are rejected. HTTP responses must be successful JSON, are limited to 64 MiB per response, and must be cancellable through context.
 
 #### History cache and scanner
 
@@ -224,10 +224,12 @@ The scanner performs bulk history passes rather than one git process per package
 
 - core legacy layout: `Formula/<name>.rb`;
 - core bucketed layout: `Formula/<bucket>/<name>.rb`, where `<bucket>` is one lowercase ASCII letter or digit;
+- core library layout: `Formula/lib/<name>.rb`;
 - cask legacy layout: `Casks/<token>.rb`;
-- cask bucketed layout: `Casks/<bucket>/<token>.rb`, where `<bucket>` is one lowercase ASCII letter or digit.
+- cask bucketed layout: `Casks/<bucket>/<token>.rb`, where `<bucket>` is one lowercase ASCII letter or digit;
+- font cask layout: `Casks/font/font-<bucket>/<token>.rb`, where `<bucket>` is one lowercase ASCII letter or digit and `<token>` begins with `font-`.
 
-Only paths matching those exact families and the catalog identifier syntax participate. Deeper paths, other roots, and arbitrary Ruby files are ignored. Directory changes between a supported legacy and bucketed path with the same filename converge on the same identifier. Catalog records resolve their date as the minimum event for their canonical identifier and known former identifiers. Font records use the same cask event map; when their earlier pre-migration event is not reachable from `Homebrew/homebrew-cask`, their date remains unknown.
+Only paths matching those exact families and the catalog identifier syntax participate. Other multi-character buckets, deeper paths, other roots, and arbitrary Ruby files are ignored. An opt-in live test verifies that every enabled current catalog `ruby_source_path` maps back to its canonical identifier and kind. Directory changes between a supported legacy and bucketed path with the same filename converge on the same identifier. Catalog records resolve their date as the minimum event for their canonical identifier and known former identifiers. Font records use the same cask event map; when their earlier pre-migration event is not reachable from `Homebrew/homebrew-cask`, their date remains unknown.
 
 Git process invocation uses explicit arguments and context cancellation. Parser code tolerates irrelevant paths but treats malformed git output or a failed git command as a refresh failure rather than publishing partial dates.
 
@@ -282,7 +284,7 @@ CREATE TABLE metadata (
 );
 ```
 
-`added_at` and `updated_at` are Unix seconds in UTC. A null `added_at` means unresolved history. `metadata` includes the schema version and the timestamp of the last successful complete refresh.
+`added_at` and `updated_at` are Unix seconds in UTC. A null `added_at` means unresolved history. `metadata` includes the schema version, the timestamp of the last successful complete refresh, and a separate history-layout algorithm version. Missing, invalid, or older algorithm versions remain readable but require a background refresh; current and future numeric versions do not refresh solely for this reason.
 
 The application loads all package rows into memory after opening the database. The current catalog is small enough for in-memory time filtering, substring search, sorting, and selection. SQLite FTS is intentionally not used.
 
@@ -292,10 +294,10 @@ The application loads all package rows into memory after opening the database. T
 
 1. Resolve the OS-specific Brewnicle cache directory.
 2. Open and validate the active database.
-3. Load package records and last-successful-refresh metadata.
+3. Load package records, last-successful-refresh metadata, and the history-layout algorithm version. Legacy indexes without the algorithm key remain valid and readable.
 4. Set the active time range to `30d` and render the cached records immediately.
-5. If the successful refresh is less than 24 hours old at startup, do no network work.
-6. If it is at least 24 hours old at startup, start a non-blocking background refresh while the cached records remain browsable.
+5. If the successful refresh is less than 24 hours old and the algorithm version is current or newer, do no network work.
+6. If it is at least 24 hours old, or its algorithm version is missing, invalid, or older, start one non-blocking background refresh while the cached records remain browsable.
 
 ### 8.2 First-run bootstrap
 
@@ -413,7 +415,7 @@ Tests do not require live network access.
 Build tiny temporary git repositories in tests and cover:
 
 - initial adds in `Formula/<name>.rb` and `Casks/<token>.rb` legacy layouts;
-- initial adds in one-character bucketed formula and cask layouts;
+- initial adds in one-character bucketed formula and cask layouts, `Formula/lib`, and nested `Casks/font/font-<bucket>` layouts;
 - same-basename moves between supported legacy and bucketed paths;
 - rename resolved through a former identifier;
 - delete and re-add retaining the first date;
@@ -425,7 +427,7 @@ The bulk scanner test asserts that correctness does not depend on launching one 
 
 ### 13.4 Store tests
 
-Cover schema creation, schema-version validation, null dates, round-trip loading, successful temporary-database promotion, rollback/cleanup on failure, preservation of the active index, and last-successful-refresh semantics.
+Cover schema creation, schema-version validation, null dates, round-trip loading, successful temporary-database promotion, rollback/cleanup on failure, preservation of the active index, last-successful-refresh semantics, and missing/old/current/future/invalid history-layout version behavior.
 
 ### 13.5 Platform action tests
 
@@ -464,10 +466,10 @@ A separately named opt-in integration test may validate catalog compatibility an
 5. Unknown-date packages appear in `all` and in no bounded range.
 6. `/` search filters name and description case-insensitively and combines with the active range.
 7. Wide terminals show the approved split pane; narrow terminals provide list/detail toggling; undersized terminals do not corrupt rendering.
-8. The UI preserves default terminal foreground/background, uses only theme-controlled ANSI accents, uses reverse video for selection, and remains understandable with `NO_COLOR`.
+8. The UI strictly inherits terminal foreground/background, assigns no explicit colors in app or visible text-input styles, uses attribute and text cues including reverse video for selection, and remains understandable with `NO_COLOR`.
 9. `o` opens only validated HTTP(S) homepages through the correct OS command without a shell. Missing or invalid homepages retain the package with an empty value and `o` disabled.
 10. `i` shows the exact install command and runs nothing unless confirmed. Confirmed formula installs use `brew install <name>`; cask/font installs use `brew install --cask <token>` with attached stdio, and the TUI resumes afterward.
-11. A valid cached index renders before refresh. If it is at least 24 hours stale when the process starts, refresh begins in the background; no later timer is scheduled in a long-running process. `r` forces refresh, and only one refresh runs at once.
+11. A valid cached index renders before refresh. If it is at least 24 hours stale or has a missing, invalid, or older history-layout version when the process starts, refresh begins once in the background; no later timer is scheduled in a long-running process. `r` forces refresh, and only one refresh runs at once.
 12. Any failed refresh leaves the prior active database and visible records intact and reports the failure.
 13. Refresh publication is transactional and atomic; no partial package set becomes active.
 14. Homebrew tap repositories are never modified. All git and database cache data remains under Brewnicle's user-cache directory.

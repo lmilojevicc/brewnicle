@@ -118,7 +118,7 @@ func TestSearchIsVisibleAndEscapeIsTwoStage(t *testing.T) {
 	m := New(uiPkgs(), false, false, true, Dependencies{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 20})
 	m = update(t, m, runeKey("/"))
-	if m.State() != StateSearch || !strings.Contains(m.View(), "Search:") {
+	if m.State() != StateSearch || !m.input.Focused() || !strings.Contains(m.View(), "Search:") {
 		t.Fatal("focused empty search is invisible")
 	}
 	m = update(t, m, runeKey("needle"))
