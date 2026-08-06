@@ -1,0 +1,16 @@
+.pi-subagents/
+.superpowers/
+
+# Local build outputs
+/brewnicle
+/bin/
+/build/
+/dist/
+
+# Local application indexes
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
