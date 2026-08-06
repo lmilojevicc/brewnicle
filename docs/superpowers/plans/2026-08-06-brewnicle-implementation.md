@@ -353,16 +353,16 @@ These amendments supersede conflicting wording later in the generated plan:
      - Render only a minimum-size message and quit hint when too small.
      - Show header tabs, query, counts, stale/refresh state; detail fields; exact install command; and context-aware footer.
      - Wrap/truncate using measured Lip Gloss cell widths so no line or total height exceeds the last `WindowSizeMsg`.
-     - Strictly inherit terminal foreground/background:
-       - Set no foreground or background colors in app-owned or visible Bubbles text-input styles.
-       - Do not use ANSI slots, ANSI-256, RGB, or adaptive colors.
-       - Use reverse video plus a `›` marker for selection and bold/brackets for the active range.
-       - Keep warnings/focus/errors distinguishable through labels, borders, bold text, and reverse video in normal and `NO_COLOR` modes.
+     - Use the terminal ANSI palette for a vivid theme without fixed RGB:
+       - Map title/selected detail to magenta `5`; focus/ranges/links/selection to cyan `6`; formula/cask/font to blue `4`/magenta `5`/yellow `3`; success/warning/error to green `2`/yellow `3`/red `1`; and secondary text to bright black `8`.
+       - Set no explicit background and use no ANSI-256, RGB, or adaptive colors. The selected row uses cyan foreground plus reverse video rather than a background assignment.
+       - Keep reverse video plus a `›` marker for selection and bold/underline/brackets for the active range.
+       - Under `NO_COLOR`, remove every color while keeping warnings/focus/errors distinguishable through labels, borders, attributes, and text markers.
      - Keep relative-age formatting deterministic by injecting `now`.
    - Tests:
      - Golden snapshots with color disabled for every required state.
      - Width/height assertions for exact breakpoint boundaries and long Unicode descriptions.
-     - Structural style tests prove foreground/background are unset for normal and `NO_COLOR` models, including text-input and cursor styles.
+     - Structural style tests prove normal mode uses exactly the approved ANSI `1`–`8` roles with no background, and `NO_COLOR` leaves every app/text-input foreground and background unset.
      - Selected rows remain distinguishable through reverse video and test-visible markers.
    - Acceptance:
      - `go test ./internal/ui`
@@ -566,7 +566,7 @@ Recommended implementation checkpoints:
 - **Corrupt-index handling:** Preserve the original file under a diagnostic suffix before rebuilding; do not repeatedly overwrite diagnostic evidence.
 - **Bubble Tea API/version drift:** Keep `ExecProcess` adaptation isolated in `internal/platform/tea.go` and verify compile/runtime behavior against the pinned version.
 - **Interactive Homebrew output:** Never capture unbounded install output. Yield the terminal and attach standard streams, then restore the TUI via callback.
-- **Terminal theme compliance:** Lip Gloss and Bubbles defaults can accidentally emit fixed colors/backgrounds. Explicitly clear component colors, set no app foreground/background, and validate inherited styles structurally in both normal and `NO_COLOR` modes.
+- **Terminal theme compliance:** Lip Gloss and Bubbles defaults can accidentally emit fixed RGB/ANSI-256 colors or backgrounds. Restrict normal-mode styling to the approved terminal ANSI `1`–`8` roles, set no background, clear dormant component defaults, and validate a fully colorless `NO_COLOR` mode structurally.
 - **Unicode width and resizing:** Byte/string lengths do not equal terminal cell widths. Use Lip Gloss width measurement and test long/wide Unicode at exact breakpoints.
 - **Upstream schema drift:** Minimal JSON structs tolerate added fields, while status, size, required identifiers, and canonical formats remain validated. Live tests stay opt-in.
 - **Unknown font dates:** Current nested font-cask paths are supported and live-validated. The deleted historical fonts repository is intentionally not required; fonts without reachable cask history still remain unknown and appear only in `all`.

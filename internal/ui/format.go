@@ -2,12 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/milo/brewnicle/internal/domain"
 	"github.com/milo/brewnicle/internal/platform"
-	"strings"
-	"time"
-	"unicode/utf8"
 )
 
 func truncate(s string, width int) string {
@@ -17,16 +17,10 @@ func truncate(s string, width int) string {
 	if lipgloss.Width(s) <= width {
 		return s
 	}
-	out := ""
-	for len(s) > 0 {
-		r, n := utf8.DecodeRuneInString(s)
-		if lipgloss.Width(out+string(r)+"…") > width {
-			break
-		}
-		out += string(r)
-		s = s[n:]
+	if width == 1 {
+		return "…"
 	}
-	return out + "…"
+	return lipgloss.NewStyle().MaxWidth(width-1).Render(s) + "…"
 }
 func wrap(s string, width int) []string {
 	if width < 1 {
@@ -69,7 +63,7 @@ func age(t *time.Time, now time.Time) string {
 	days := int(d.Hours() / 24)
 	return fmt.Sprintf("%s · %d days ago", t.UTC().Format("2006-01-02"), days)
 }
-func detailLines(p domain.Package, width int, now time.Time, installAvailable bool) []string {
+func detailLines(p domain.Package, width int, now time.Time, installAvailable bool, s styles) []string {
 	home := p.Homepage
 	if home == "" {
 		home = "Unavailable"
@@ -78,11 +72,23 @@ func detailLines(p domain.Package, width int, now time.Time, installAvailable bo
 	if !installAvailable {
 		install = "Unavailable (Homebrew not found)"
 	}
-	lines := []string{p.Name + "  [" + string(p.Kind) + "]", age(p.AddedAt, now), ""}
+
+	kind := string(p.Kind)
+	suffix := "  [" + kind + "]"
+	heading := s.title.Render(truncate(p.Name, width))
+	if lipgloss.Width(suffix) < width {
+		nameWidth := width - lipgloss.Width(suffix)
+		heading = s.title.Render(truncate(p.Name, nameWidth)) + "  [" + s.kind(p.Kind).Render(kind) + "]"
+	}
+	lines := []string{heading, s.muted.Render(truncate(age(p.AddedAt, now), width)), ""}
 	lines = append(lines, wrap(p.Description, width)...)
-	lines = append(lines, "", "Homepage: "+home, "Install: "+install)
-	for i := range lines {
-		lines[i] = truncate(lines[i], width)
+	lines = append(lines, "")
+	lines = append(lines, s.link.Render(truncate("Homepage: "+home, width)))
+	installLabel := s.installPrompt.Render("Install: ")
+	if lipgloss.Width(installLabel) >= width {
+		lines = append(lines, s.installPrompt.Render(truncate("Install: "+install, width)))
+	} else {
+		lines = append(lines, installLabel+truncate(install, width-lipgloss.Width(installLabel)))
 	}
 	return lines
 }

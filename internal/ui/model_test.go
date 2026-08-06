@@ -195,7 +195,7 @@ func TestHomepageInstallAvailabilityAndCompletion(t *testing.T) {
 		t.Fatal("homepage action unavailable")
 	}
 	unavailable = update(t, unavailable, runeKey("i"))
-	if unavailable.State() == StateConfirm || !strings.Contains(unavailable.View(), "Homebrew is unavailable") || !strings.Contains(unavailable.View(), "Install: Unavailable") {
+	if unavailable.State() == StateConfirm || unavailable.statusLevel != statusWarning || !strings.Contains(unavailable.View(), "Homebrew is unavailable") || !strings.Contains(unavailable.View(), "Install: Unavailable") {
 		t.Fatal(unavailable.View())
 	}
 
@@ -215,8 +215,12 @@ func TestHomepageInstallAvailabilityAndCompletion(t *testing.T) {
 		t.Fatal(runs, m.State())
 	}
 	m = update(t, m, platform.ExecResult{})
-	if m.State() != StateBrowse || !strings.Contains(m.status, "complete") {
+	if m.State() != StateBrowse || m.statusLevel != statusSuccess || !strings.Contains(m.status, "complete") {
 		t.Fatal(m.State(), m.status)
+	}
+	m = update(t, m, platform.ExecResult{Err: errors.New("denied")})
+	if m.statusLevel != statusError {
+		t.Fatal("failed install did not receive error severity")
 	}
 }
 
@@ -240,6 +244,9 @@ func TestRefreshSummaryStaleFeedbackAndSelectionRetention(t *testing.T) {
 	if got.Key() != selected.Key() {
 		t.Fatalf("selection changed from %s to %s", selected.Key(), got.Key())
 	}
+	if m.statusLevel != statusWarning {
+		t.Fatal("skipped refresh did not receive warning severity")
+	}
 	for _, want := range []string{"skipped 2 formulae, 3 casks", "sync warning"} {
 		if !strings.Contains(m.status, want) {
 			t.Fatal(m.status)
@@ -259,7 +266,7 @@ func TestFatalRetryAndCombinedBootstrapDiagnostic(t *testing.T) {
 	m.width, m.height = 100, 20
 	m.refreshing = true
 	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Done: true, Err: errors.New("network down")}})
-	if m.State() != StateFatal || !strings.Contains(m.status, "invalid index") || !strings.Contains(m.status, "network down") {
+	if m.State() != StateFatal || m.statusLevel != statusError || !strings.Contains(m.status, "invalid index") || !strings.Contains(m.status, "network down") {
 		t.Fatal(m.State(), m.status)
 	}
 	m.refreshing = false

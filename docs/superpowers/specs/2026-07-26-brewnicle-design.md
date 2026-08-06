@@ -175,12 +175,14 @@ These breakpoint values belong to the UI package as named constants and are fixe
 
 ### 5.7 Terminal-native styling
 
-Brewnicle strictly inherits the terminal's default foreground and background. App-owned styles and visible component styles set no foreground or background colors: no ANSI palette slots, ANSI-256, RGB, or adaptive colors.
+Brewnicle uses a vivid theme made exclusively from terminal ANSI palette slots `1` through `8`; the user's terminal theme controls the actual RGB values. The application never uses RGB, ANSI-256, adaptive colors, or an explicit background.
 
-- The selected row uses reverse video plus a visible `›` marker.
-- The title and active range use bold text; brackets identify the active range independently of attributes.
-- Borders, spacing, labels, and text weight carry meaning without color.
-- `NO_COLOR` uses the same inherited-color policy; selection, focus, warnings, and errors remain distinguishable through reverse video, labels, borders, and text weight.
+- Title and selected package/detail names use magenta (`5`).
+- Active range, search focus, links, and homepage roles use cyan (`6`). The active range is also bold, underlined, and bracketed.
+- Formula, cask, and font labels use blue (`4`), magenta (`5`), and yellow (`3`) respectively.
+- Success uses green (`2`); warnings, stale state, and install prompts use yellow (`3`); errors use red (`1`); secondary/help text uses bright black (`8`).
+- The selected row uses cyan foreground plus reverse video and a visible `›` marker, producing a palette-driven selection without painting a background directly.
+- `NO_COLOR` removes every foreground/background color while preserving bold, underline, reverse video, brackets, labels, and markers, so no state depends on color alone.
 
 ## 6. Architecture
 
@@ -466,7 +468,7 @@ A separately named opt-in integration test may validate catalog compatibility an
 5. Unknown-date packages appear in `all` and in no bounded range.
 6. `/` search filters name and description case-insensitively and combines with the active range.
 7. Wide terminals show the approved split pane; narrow terminals provide list/detail toggling; undersized terminals do not corrupt rendering.
-8. The UI strictly inherits terminal foreground/background, assigns no explicit colors in app or visible text-input styles, uses attribute and text cues including reverse video for selection, and remains understandable with `NO_COLOR`.
+8. The UI uses only the approved terminal ANSI `1`–`8` role mapping, sets no explicit background, RGB, ANSI-256, or adaptive colors, uses redundant attribute/text cues including reverse video for selection, and removes every color while remaining understandable under `NO_COLOR`.
 9. `o` opens only validated HTTP(S) homepages through the correct OS command without a shell. Missing or invalid homepages retain the package with an empty value and `o` disabled.
 10. `i` shows the exact install command and runs nothing unless confirmed. Confirmed formula installs use `brew install <name>`; cask/font installs use `brew install --cask <token>` with attached stdio, and the TUI resumes afterward.
 11. A valid cached index renders before refresh. If it is at least 24 hours stale or has a missing, invalid, or older history-layout version when the process starts, refresh begins once in the background; no later timer is scheduled in a long-running process. `r` forces refresh, and only one refresh runs at once.

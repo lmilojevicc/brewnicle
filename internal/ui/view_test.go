@@ -29,30 +29,30 @@ func TestResponsiveViewsFitTerminalCellWidth(t *testing.T) {
 	}
 }
 
-func TestStylesStrictlyInheritTerminalColors(t *testing.T) {
+func TestStylesUseOnlyApprovedTerminalPalette(t *testing.T) {
+	approved := map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true, "6": true, "8": true}
 	for _, noColor := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "no-color"}[noColor], func(t *testing.T) {
 			s := makeStyles(noColor)
-			for name, style := range map[string]lipgloss.Style{
+			styles := map[string]lipgloss.Style{
 				"title": s.title, "accent": s.accent, "selected": s.selected,
-			} {
-				assertInheritedStyle(t, name, style)
+				"formula": s.formula, "cask": s.cask, "font": s.font,
+				"success": s.success, "warning": s.warning, "danger": s.danger,
+				"muted": s.muted, "link": s.link, "install prompt": s.installPrompt,
 			}
-			if !s.title.GetBold() || !s.accent.GetBold() || !s.selected.GetReverse() {
-				t.Fatal("attribute-only title, active range, or selection cue missing")
-			}
-
 			m := New(uiPkgs(), false, false, noColor, Dependencies{})
-			for name, style := range map[string]lipgloss.Style{
-				"input prompt":        m.input.PromptStyle,
-				"input text":          m.input.TextStyle,
-				"input placeholder":   m.input.PlaceholderStyle,
-				"input completion":    m.input.CompletionStyle,
-				"input cursor legacy": m.input.CursorStyle,
-				"input cursor text":   m.input.Cursor.TextStyle,
-				"input cursor":        m.input.Cursor.Style,
-			} {
-				assertInheritedStyle(t, name, style)
+			styles["input prompt"] = m.input.PromptStyle
+			styles["input text"] = m.input.TextStyle
+			styles["input placeholder"] = m.input.PlaceholderStyle
+			styles["input completion"] = m.input.CompletionStyle
+			styles["input cursor legacy"] = m.input.CursorStyle
+			styles["input cursor text"] = m.input.Cursor.TextStyle
+			styles["input cursor"] = m.input.Cursor.Style
+			for name, style := range styles {
+				assertPaletteStyle(t, name, style, noColor, approved)
+			}
+			if !s.title.GetBold() || !s.accent.GetBold() || !s.accent.GetUnderline() || !s.selected.GetReverse() {
+				t.Fatal("attribute and text fallbacks for title, active range, or selection are missing")
 			}
 			if !m.input.Cursor.Style.GetReverse() {
 				t.Fatal("cursor lost its color-independent reverse cue")
@@ -66,13 +66,51 @@ func TestStylesStrictlyInheritTerminalColors(t *testing.T) {
 	}
 }
 
-func assertInheritedStyle(t *testing.T, name string, style lipgloss.Style) {
+func assertPaletteStyle(t *testing.T, name string, style lipgloss.Style, noColor bool, approved map[string]bool) {
 	t.Helper()
-	if _, ok := style.GetForeground().(lipgloss.NoColor); !ok {
-		t.Errorf("%s sets foreground %T", name, style.GetForeground())
-	}
 	if _, ok := style.GetBackground().(lipgloss.NoColor); !ok {
-		t.Errorf("%s sets background %T", name, style.GetBackground())
+		t.Errorf("%s paints a background with %T", name, style.GetBackground())
+	}
+	foreground := style.GetForeground()
+	if _, ok := foreground.(lipgloss.NoColor); ok {
+		return
+	}
+	color, ok := foreground.(lipgloss.Color)
+	if noColor || !ok || !approved[string(color)] {
+		t.Errorf("%s uses unapproved foreground %#v", name, foreground)
+	}
+}
+
+func TestVividRoleMapping(t *testing.T) {
+	s := makeStyles(false)
+	for name, tc := range map[string]struct {
+		style lipgloss.Style
+		want  string
+	}{
+		"title": {s.title, "5"}, "accent": {s.accent, "6"}, "selected": {s.selected, "6"},
+		"formula": {s.formula, "4"}, "cask": {s.cask, "5"}, "font": {s.font, "3"},
+		"success": {s.success, "2"}, "warning": {s.warning, "3"}, "danger": {s.danger, "1"},
+		"muted": {s.muted, "8"}, "link": {s.link, "6"}, "install": {s.installPrompt, "3"},
+	} {
+		color, ok := tc.style.GetForeground().(lipgloss.Color)
+		if !ok || string(color) != tc.want {
+			t.Errorf("%s foreground = %#v, want ANSI %s", name, tc.style.GetForeground(), tc.want)
+		}
+	}
+	m := New(uiPkgs(), false, false, false, Dependencies{})
+	for name, style := range map[string]lipgloss.Style{"input prompt": m.input.PromptStyle, "input cursor": m.input.Cursor.Style} {
+		color, ok := style.GetForeground().(lipgloss.Color)
+		if !ok || string(color) != "6" {
+			t.Errorf("%s foreground = %#v, want ANSI 6", name, style.GetForeground())
+		}
+	}
+	for name, style := range map[string]lipgloss.Style{
+		"input text": m.input.TextStyle, "input placeholder": m.input.PlaceholderStyle,
+		"input completion": m.input.CompletionStyle, "input cursor text": m.input.Cursor.TextStyle,
+	} {
+		if _, ok := style.GetForeground().(lipgloss.NoColor); !ok {
+			t.Errorf("%s should inherit terminal foreground", name)
+		}
 	}
 }
 
@@ -127,7 +165,7 @@ func TestTruncateAndWrapUseCellWidth(t *testing.T) {
 		}
 	}
 	p := domain.Package{Name: "界", Kind: domain.KindFormula, Description: "界界 e\u0301e\u0301", InstallTarget: "界"}
-	for _, line := range detailLines(p, 8, uiPkgs()[0].UpdatedAt, false) {
+	for _, line := range detailLines(p, 8, uiPkgs()[0].UpdatedAt, false, makeStyles(true)) {
 		if lipgloss.Width(line) > 8 {
 			t.Fatalf("detail line too wide: %q", line)
 		}

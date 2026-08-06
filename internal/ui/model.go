@@ -11,6 +11,15 @@ import (
 
 type State int
 
+type statusLevel int
+
+const (
+	statusNone statusLevel = iota
+	statusSuccess
+	statusWarning
+	statusError
+)
+
 const (
 	StateBootstrap State = iota
 	StateBrowse
@@ -46,6 +55,7 @@ type Model struct {
 	refreshCh           <-chan RefreshEvent
 	progress            string
 	status              string
+	statusLevel         statusLevel
 	stale               bool
 	bootstrapDiagnostic string
 	now                 func() time.Time
@@ -62,6 +72,12 @@ func New(packages []domain.Package, bootstrap, stale, noColor bool, deps Depende
 	in.CursorStyle = inherited
 	in.Cursor.TextStyle = inherited
 	in.Cursor.Style = lipgloss.NewStyle().Reverse(true)
+	if !noColor {
+		focus := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+		in.PromptStyle = focus
+		in.CursorStyle = focus.Reverse(true)
+		in.Cursor.Style = focus.Reverse(true)
+	}
 	in.Prompt = "Search: "
 	in.CharLimit = 120
 	in.Width = 30
@@ -104,6 +120,11 @@ func (m *Model) applyFilter(keep string) {
 			break
 		}
 	}
+}
+
+func (m *Model) setStatus(text string, level statusLevel) {
+	m.status = text
+	m.statusLevel = level
 }
 
 func (m Model) selectedPackage() (domain.Package, bool) {

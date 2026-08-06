@@ -34,7 +34,7 @@ The app never modifies Homebrew’s own taps. It stores an SQLite index and bare
 
 Search and install confirmation own text keys, including `q` and `ctrl+c`; leave them with `esc`/`enter` or the displayed confirmation controls. The too-small screen keeps its explicit quit control. The default range is `30d`. If `brew` is unavailable, browsing and homepage actions remain usable while installation is visibly disabled. Installation never starts without confirmation. Formulae run `brew install NAME`; casks and fonts run `brew install --cask TOKEN`. Commands use direct argument vectors, never a shell. Bubble Tea yields the terminal to Homebrew for interactive output and restores the TUI afterward.
 
-Brewnicle strictly inherits the terminal’s foreground and background. It assigns no ANSI, RGB, adaptive, foreground, or background colors; bold text, reverse video, brackets, labels, and the `›` marker provide state cues. `NO_COLOR` remains supported but produces the same inherited-color policy.
+Brewnicle uses a vivid theme built only from the terminal’s ANSI palette, so the terminal theme controls the actual hues. Magenta marks titles and selected package names; cyan marks focus, active ranges, links, and the reverse-video selected row; formulae are blue, casks magenta, and fonts yellow; success is green, warnings are yellow, errors are red, and secondary help is bright black. Brewnicle never uses RGB, ANSI-256, adaptive colors, or a painted background. `NO_COLOR` removes every color while preserving bold, underline, reverse video, brackets, labels, and the `›` marker.
 
 ## Requirements and usage
 

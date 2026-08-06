@@ -61,17 +61,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ActionResultMsg:
 		m.state = StateBrowse
 		if x.Err != nil {
-			m.status = x.Action + " failed: " + x.Err.Error()
+			m.setStatus(x.Action+" failed: "+x.Err.Error(), statusError)
 		} else {
-			m.status = x.Action + " complete"
+			m.setStatus(x.Action+" complete", statusSuccess)
 		}
 		return m, nil
 	case platform.ExecResult:
 		m.state = StateBrowse
 		if x.Err != nil {
-			m.status = "Install failed: " + x.Err.Error()
+			m.setStatus("Install failed: "+x.Err.Error(), statusError)
 		} else {
-			m.status = "Install complete"
+			m.setStatus("Install complete", statusSuccess)
 		}
 		return m, nil
 	}
@@ -103,7 +103,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.deps.Install == nil {
 				m.state = StateBrowse
-				m.status = m.installUnavailableMessage()
+				m.setStatus(m.installUnavailableMessage(), statusWarning)
 				return m, nil
 			}
 			m.state = StateRunningInstall
@@ -175,12 +175,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.deps.Open(p)
 			}
 		} else {
-			m.status = "Homepage unavailable"
+			m.setStatus("Homepage unavailable", statusWarning)
 		}
 	case "i":
 		if _, selected := m.selectedPackage(); selected {
 			if m.deps.Install == nil {
-				m.status = m.installUnavailableMessage()
+				m.setStatus(m.installUnavailableMessage(), statusWarning)
 				break
 			}
 			m.state = StateConfirm
@@ -210,12 +210,12 @@ func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 		if len(m.packages) == 0 {
 			m.state = StateFatal
 			if m.bootstrapDiagnostic != "" {
-				m.status = m.bootstrapDiagnostic + "; rebuild failed: " + e.Err.Error()
+				m.setStatus(m.bootstrapDiagnostic+"; rebuild failed: "+e.Err.Error(), statusError)
 			} else {
-				m.status = e.Err.Error()
+				m.setStatus(e.Err.Error(), statusError)
 			}
 		} else {
-			m.status = "Refresh failed: " + e.Err.Error()
+			m.setStatus("Refresh failed: "+e.Err.Error(), statusError)
 		}
 		return m, nil
 	}
@@ -230,13 +230,16 @@ func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 	m.stale = false
 	m.bootstrapDiagnostic = ""
 	parts := []string{fmt.Sprintf("Refreshed %d packages", len(m.packages))}
+	level := statusSuccess
 	if e.Summary.SkippedFormulae != 0 || e.Summary.SkippedCasks != 0 {
 		parts = append(parts, fmt.Sprintf("skipped %d formulae, %d casks", e.Summary.SkippedFormulae, e.Summary.SkippedCasks))
+		level = statusWarning
 	}
 	if e.Summary.Warning != "" {
 		parts = append(parts, e.Summary.Warning)
+		level = statusWarning
 	}
-	m.status = strings.Join(parts, "; ")
+	m.setStatus(strings.Join(parts, "; "), level)
 	if m.state == StateBootstrap || m.state == StateFatal {
 		m.state = StateBrowse
 	}
