@@ -1,0 +1,23 @@
+package ui
+
+import (
+	"github.com/milo/brewnicle/internal/domain"
+	"github.com/milo/brewnicle/internal/refresh"
+)
+
+type RefreshEvent struct {
+	Progress *refresh.Progress
+	Packages []domain.Package
+	Summary  refresh.Summary
+	Err      error
+	Done     bool
+}
+type RefreshStarter func() <-chan RefreshEvent
+
+type startupFrameMsg struct{}
+type startRefreshMsg struct{}
+type refreshEventMsg struct{ Event RefreshEvent }
+type ActionResultMsg struct {
+	Action string
+	Err    error
+}

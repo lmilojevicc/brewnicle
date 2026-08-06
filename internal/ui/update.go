@@ -1,0 +1,279 @@
+package ui
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/milo/brewnicle/internal/domain"
+	"github.com/milo/brewnicle/internal/platform"
+)
+
+const startupRenderDelay = 50 * time.Millisecond
+
+func waitStartupFrame() tea.Cmd {
+	return tea.Tick(startupRenderDelay, func(time.Time) tea.Msg { return startupFrameMsg{} })
+}
+
+func waitRefresh(ch <-chan RefreshEvent) tea.Cmd {
+	return func() tea.Msg {
+		e, ok := <-ch
+		if !ok {
+			return refreshEventMsg{Event: RefreshEvent{Done: true, Err: errors.New("refresh ended without a result")}}
+		}
+		return refreshEventMsg{Event: e}
+	}
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch x := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = x.Width, x.Height
+		m.input.Width = searchInputWidth(m.width)
+		if isWideLayout(m.width, m.height) && m.state == StateNarrowDetail {
+			m.state = StateBrowse
+		}
+		if m.pendingRefresh && !m.startupFramePending && isUsableLayout(m.width, m.height) {
+			m.startupFramePending = true
+			return m, waitStartupFrame()
+		}
+		return m, nil
+	case startupFrameMsg:
+		m.startupFramePending = false
+		if !m.pendingRefresh {
+			return m, nil
+		}
+		m.pendingRefresh = false
+		return m, func() tea.Msg { return startRefreshMsg{} }
+	case startRefreshMsg:
+		if m.refreshing || m.deps.Refresh == nil {
+			return m, nil
+		}
+		m.refreshing = true
+		m.pendingRefresh = false
+		m.progress = "starting refresh"
+		m.refreshCh = m.deps.Refresh()
+		return m, waitRefresh(m.refreshCh)
+	case refreshEventMsg:
+		return m.updateRefreshEvent(x.Event)
+	case ActionResultMsg:
+		m.state = StateBrowse
+		if x.Err != nil {
+			m.status = x.Action + " failed: " + x.Err.Error()
+		} else {
+			m.status = x.Action + " complete"
+		}
+		return m, nil
+	case platform.ExecResult:
+		m.state = StateBrowse
+		if x.Err != nil {
+			m.status = "Install failed: " + x.Err.Error()
+		} else {
+			m.status = "Install complete"
+		}
+		return m, nil
+	}
+
+	km, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	key := km.String()
+
+	// The terminal-too-small screen hides modal content and owns the only
+	// visible escape control. At usable sizes, search and confirmation own all
+	// text keys, including q and ctrl+c.
+	if !isUsableLayout(m.width, m.height) && (key == "q" || key == "ctrl+c") {
+		return m, tea.Quit
+	}
+	if m.state == StateSearch {
+		return m.updateSearch(km)
+	}
+	if m.state == StateConfirm {
+		switch key {
+		case "esc", "n":
+			m.state = StateBrowse
+			return m, nil
+		case "enter", "y":
+			p, selected := m.selectedPackage()
+			if !selected {
+				return m, nil
+			}
+			if m.deps.Install == nil {
+				m.state = StateBrowse
+				m.status = m.installUnavailableMessage()
+				return m, nil
+			}
+			m.state = StateRunningInstall
+			return m, m.deps.Install(p)
+		}
+		return m, nil
+	}
+	if key == "ctrl+c" {
+		return m, tea.Quit
+	}
+	if m.state == StateHelp {
+		switch key {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "?", "esc":
+			m.state = m.previous
+		}
+		return m, nil
+	}
+	if m.state == StateFatal {
+		if key == "r" && !m.refreshing {
+			return m, func() tea.Msg { return startRefreshMsg{} }
+		}
+		if key == "q" {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+	if m.state == StateRunningInstall {
+		return m, nil
+	}
+
+	switch key {
+	case "q":
+		return m, tea.Quit
+	case "up", "k":
+		if m.selected > 0 {
+			m.selected--
+		}
+	case "down", "j":
+		if m.selected+1 < len(m.visible) {
+			m.selected++
+		}
+	case "1", "2", "3", "4", "5":
+		m.changeRange(domainRange(int(key[0] - '1')))
+	case "tab":
+		m.changeRange(cycle(m.rangeValue, 1))
+	case "shift+tab":
+		m.changeRange(cycle(m.rangeValue, -1))
+	case "/":
+		m.state = StateSearch
+		m.input.Focus()
+		return m, textinputBlink()
+	case "esc":
+		if m.query != "" {
+			m.input.SetValue("")
+			m.applyFilter("")
+		}
+	case "?":
+		m.previous = m.state
+		m.state = StateHelp
+	case "r":
+		if !m.refreshing {
+			return m, func() tea.Msg { return startRefreshMsg{} }
+		}
+	case "o":
+		if p, selected := m.selectedPackage(); selected && p.Homepage != "" {
+			if m.deps.Open != nil {
+				return m, m.deps.Open(p)
+			}
+		} else {
+			m.status = "Homepage unavailable"
+		}
+	case "i":
+		if _, selected := m.selectedPackage(); selected {
+			if m.deps.Install == nil {
+				m.status = m.installUnavailableMessage()
+				break
+			}
+			m.state = StateConfirm
+		}
+	case "enter":
+		if isNarrowLayout(m.width, m.height) {
+			if m.state == StateNarrowDetail {
+				m.state = StateBrowse
+			} else {
+				m.state = StateNarrowDetail
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
+	if e.Progress != nil {
+		m.progress = e.Progress.Detail
+	}
+	if !e.Done {
+		return m, waitRefresh(m.refreshCh)
+	}
+	m.refreshing = false
+	m.progress = ""
+	if e.Err != nil {
+		if len(m.packages) == 0 {
+			m.state = StateFatal
+			if m.bootstrapDiagnostic != "" {
+				m.status = m.bootstrapDiagnostic + "; rebuild failed: " + e.Err.Error()
+			} else {
+				m.status = e.Err.Error()
+			}
+		} else {
+			m.status = "Refresh failed: " + e.Err.Error()
+		}
+		return m, nil
+	}
+	key := ""
+	if p, selected := m.selectedPackage(); selected {
+		key = p.Key()
+	}
+	if e.Packages != nil {
+		m.packages = e.Packages
+	}
+	m.applyFilter(key)
+	m.stale = false
+	m.bootstrapDiagnostic = ""
+	parts := []string{fmt.Sprintf("Refreshed %d packages", len(m.packages))}
+	if e.Summary.SkippedFormulae != 0 || e.Summary.SkippedCasks != 0 {
+		parts = append(parts, fmt.Sprintf("skipped %d formulae, %d casks", e.Summary.SkippedFormulae, e.Summary.SkippedCasks))
+	}
+	if e.Summary.Warning != "" {
+		parts = append(parts, e.Summary.Warning)
+	}
+	m.status = strings.Join(parts, "; ")
+	if m.state == StateBootstrap || m.state == StateFatal {
+		m.state = StateBrowse
+	}
+	return m, nil
+}
+
+func (m *Model) changeRange(next domain.Range) {
+	keep := ""
+	if p, selected := m.selectedPackage(); selected {
+		keep = p.Key()
+	}
+	m.rangeValue = next
+	m.applyFilter(keep)
+}
+
+func (m Model) updateSearch(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case "enter":
+		m.input.Blur()
+		m.state = StateBrowse
+		m.applyFilter("")
+		return m, nil
+	case "esc":
+		m.input.Blur()
+		m.state = StateBrowse
+		m.applyFilter("")
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(k)
+	m.applyFilter("")
+	return m, cmd
+}
+
+func (m Model) installUnavailableMessage() string {
+	if m.deps.InstallUnavailable != "" {
+		return m.deps.InstallUnavailable
+	}
+	return "Homebrew is unavailable"
+}
