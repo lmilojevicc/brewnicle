@@ -23,6 +23,7 @@ The app never modifies Homebrew’s own taps. It stores an SQLite index and bare
 | `↑`/`↓`, `j`/`k` | move selection |
 | `1`…`5` | `7d`, `30d`, `90d`, `1y`, `all` |
 | `tab` / `shift+tab` | cycle ranges |
+| `f` / `F` | cycle package type forward/back: all, formula, cask, font |
 | `/` | search name and description |
 | `esc` | leave/clear search or close modal |
 | `o` | open selected homepage |
@@ -32,7 +33,7 @@ The app never modifies Homebrew’s own taps. It stores an SQLite index and bare
 | `?` | help |
 | `q`, `ctrl+c` | quit when search or install confirmation is not active |
 
-Search and install confirmation own text keys, including `q` and `ctrl+c`; leave them with `esc`/`enter` or the displayed confirmation controls. The too-small screen keeps its explicit quit control. The default range is `30d`. If `brew` is unavailable, browsing and homepage actions remain usable while installation is visibly disabled. Installation never starts without confirmation. Formulae run `brew install NAME`; casks and fonts run `brew install --cask TOKEN`. Commands use direct argument vectors, never a shell. Bubble Tea yields the terminal to Homebrew for interactive output and restores the TUI afterward.
+Search and install confirmation own text keys, including `q` and `ctrl+c`; leave them with `esc`/`enter` or the displayed confirmation controls. The too-small screen keeps its explicit quit control. The default range is `30d` and the default package type is `all`. Package type, time range, and search filters combine together. The selected package row stays vertically centered while browsing when possible; the first and last pages clamp without blank padding. If `brew` is unavailable, browsing and homepage actions remain usable while installation is visibly disabled. Installation never starts without confirmation. Formulae run `brew install NAME`; casks and fonts run `brew install --cask TOKEN`. Commands use direct argument vectors, never a shell. Bubble Tea yields the terminal to Homebrew for interactive output and restores the TUI afterward.
 
 Brewnicle uses a vivid theme built only from the terminal’s ANSI palette, so the terminal theme controls the actual hues. Magenta marks titles and selected package names; cyan marks focus, active ranges, links, and the reverse-video selected row; formulae are blue, casks magenta, and fonts yellow; success is green, warnings are yellow, errors are red, and secondary help is bright black. Brewnicle never uses RGB, ANSI-256, adaptive colors, or a painted background. `NO_COLOR` removes every color while preserving bold, underline, reverse video, brackets, labels, and the `›` marker.
 
@@ -78,6 +79,6 @@ HOME="$TMP_HOME" XDG_CACHE_HOME="$TMP_HOME/cache" \
 HOME="$TMP_HOME" XDG_CACHE_HOME="$TMP_HOME/cache" /tmp/brewnicle-smoke
 ```
 
-Exercise wide (≥90×16), narrow (at least 50×12 but not wide, including wide-but-short terminals), and too-small views; search and ranges; help; homepage-unavailable feedback; and install confirmation cancellation. Do not confirm a real install as part of validation.
+Exercise wide (≥90×16), narrow (at least 50×12 but not wide, including wide-but-short terminals), and too-small views; search, ranges, package-type cycling, centered selection near the middle and boundaries; help; homepage-unavailable feedback; and install confirmation cancellation. Do not confirm a real install as part of validation.
 
 Brewnicle intentionally has no hosted index, telemetry, dependency management, release automation, or package upgrade/uninstall features.

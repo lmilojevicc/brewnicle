@@ -19,6 +19,41 @@ const (
 
 var Ranges = []Range{Range7D, Range30D, Range90D, Range1Y, RangeAll}
 
+type KindFilter string
+
+const (
+	KindFilterAll     KindFilter = "all"
+	KindFilterFormula KindFilter = "formula"
+	KindFilterCask    KindFilter = "cask"
+	KindFilterFont    KindFilter = "font"
+	DefaultKindFilter            = KindFilterAll
+)
+
+var KindFilters = []KindFilter{KindFilterAll, KindFilterFormula, KindFilterCask, KindFilterFont}
+
+func (f KindFilter) Valid() bool {
+	switch f {
+	case KindFilterAll, KindFilterFormula, KindFilterCask, KindFilterFont:
+		return true
+	default:
+		return false
+	}
+}
+
+func (f KindFilter) String() string {
+	if !f.Valid() {
+		return string(KindFilterAll)
+	}
+	return string(f)
+}
+
+func (f KindFilter) matches(kind Kind) bool {
+	if !f.Valid() || f == KindFilterAll {
+		return true
+	}
+	return string(f) == string(kind)
+}
+
 func (r Range) Duration() (time.Duration, bool) {
 	switch r {
 	case Range7D:
@@ -34,13 +69,16 @@ func (r Range) Duration() (time.Duration, bool) {
 	}
 }
 
-func Filter(packages []Package, r Range, query string, now time.Time) []Package {
+func Filter(packages []Package, r Range, kindFilter KindFilter, query string, now time.Time) []Package {
 	now = now.UTC()
 	q := strings.ToLower(strings.TrimSpace(query))
 	d, bounded := r.Duration()
 	cutoff := now.Add(-d)
 	out := make([]Package, 0, len(packages))
 	for _, p := range packages {
+		if !kindFilter.matches(p.Kind) {
+			continue
+		}
 		if bounded && (p.AddedAt == nil || p.AddedAt.UTC().Before(cutoff)) {
 			continue
 		}
@@ -81,4 +119,19 @@ func CycleRange(r Range, delta int) Range {
 		idx += len(Ranges)
 	}
 	return Ranges[idx]
+}
+
+func CycleKindFilter(filter KindFilter, delta int) KindFilter {
+	idx := 0
+	for i, candidate := range KindFilters {
+		if candidate == filter {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + delta) % len(KindFilters)
+	if idx < 0 {
+		idx += len(KindFilters)
+	}
+	return KindFilters[idx]
 }

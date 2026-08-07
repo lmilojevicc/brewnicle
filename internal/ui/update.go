@@ -85,8 +85,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// The terminal-too-small screen hides modal content and owns the only
 	// visible escape control. At usable sizes, search and confirmation own all
 	// text keys, including q and ctrl+c.
-	if !isUsableLayout(m.width, m.height) && (key == "q" || key == "ctrl+c") {
-		return m, tea.Quit
+	if m.width > 0 && m.height > 0 && !isUsableLayout(m.width, m.height) {
+		if key == "q" || key == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m, nil
 	}
 	if m.state == StateSearch {
 		return m.updateSearch(km)
@@ -153,6 +156,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.changeRange(cycle(m.rangeValue, 1))
 	case "shift+tab":
 		m.changeRange(cycle(m.rangeValue, -1))
+	case "f":
+		m.changeKindFilter(domain.CycleKindFilter(m.kindFilter, 1))
+	case "F":
+		m.changeKindFilter(domain.CycleKindFilter(m.kindFilter, -1))
 	case "/":
 		m.state = StateSearch
 		m.input.Focus()
@@ -252,6 +259,15 @@ func (m *Model) changeRange(next domain.Range) {
 		keep = p.Key()
 	}
 	m.rangeValue = next
+	m.applyFilter(keep)
+}
+
+func (m *Model) changeKindFilter(next domain.KindFilter) {
+	keep := ""
+	if p, selected := m.selectedPackage(); selected {
+		keep = p.Key()
+	}
+	m.kindFilter = next
 	m.applyFilter(keep)
 }
 

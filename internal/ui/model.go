@@ -42,6 +42,7 @@ type Dependencies struct {
 type Model struct {
 	packages, visible   []domain.Package
 	rangeValue          domain.Range
+	kindFilter          domain.KindFilter
 	query               string
 	selected            int
 	width, height       int
@@ -88,6 +89,7 @@ func New(packages []domain.Package, bootstrap, stale, noColor bool, deps Depende
 	m := Model{
 		packages:            packages,
 		rangeValue:          domain.DefaultRange,
+		kindFilter:          domain.DefaultKindFilter,
 		state:               state,
 		input:               in,
 		deps:                deps,
@@ -112,13 +114,16 @@ func (m *Model) applyFilter(keep string) {
 	if old == "" && m.selected >= 0 && m.selected < len(m.visible) {
 		old = m.visible[m.selected].Key()
 	}
-	m.visible = domain.Filter(m.packages, m.rangeValue, m.query, m.now())
+	m.visible = domain.Filter(m.packages, m.rangeValue, m.kindFilter, m.query, m.now())
 	m.selected = 0
 	for i, p := range m.visible {
 		if p.Key() == old {
 			m.selected = i
 			break
 		}
+	}
+	if len(m.visible) == 0 && m.state == StateNarrowDetail {
+		m.state = StateBrowse
 	}
 }
 
@@ -134,9 +139,10 @@ func (m Model) selectedPackage() (domain.Package, bool) {
 	return m.visible[m.selected], true
 }
 
-func (m Model) Range() domain.Range       { return m.rangeValue }
-func (m Model) Refreshing() bool          { return m.refreshing }
-func (m Model) PendingRefresh() bool      { return m.pendingRefresh }
-func (m Model) Stale() bool               { return m.stale }
-func (m Model) State() State              { return m.state }
-func (m Model) Visible() []domain.Package { return append([]domain.Package(nil), m.visible...) }
+func (m Model) Range() domain.Range           { return m.rangeValue }
+func (m Model) KindFilter() domain.KindFilter { return m.kindFilter }
+func (m Model) Refreshing() bool              { return m.refreshing }
+func (m Model) PendingRefresh() bool          { return m.pendingRefresh }
+func (m Model) Stale() bool                   { return m.stale }
+func (m Model) State() State                  { return m.state }
+func (m Model) Visible() []domain.Package     { return append([]domain.Package(nil), m.visible...) }

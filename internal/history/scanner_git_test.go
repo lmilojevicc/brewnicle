@@ -152,10 +152,10 @@ func TestScannerCurrentLibAndFontPathsAppearInBoundedFilters(t *testing.T) {
 		{Name: "font-nexon-lv2-gothic", Kind: domain.KindFont},
 	}
 	resolved := Resolve(packages, coreEvents, caskEvents, now)
-	if got := domain.Filter(resolved, domain.Range7D, "", now); len(got) != 1 || got[0].Name != "font-nexon-lv2-gothic" {
+	if got := domain.Filter(resolved, domain.Range7D, domain.KindFilterAll, "", now); len(got) != 1 || got[0].Name != "font-nexon-lv2-gothic" {
 		t.Fatalf("7d filter = %+v", got)
 	}
-	if got := domain.Filter(resolved, domain.Range30D, "", now); len(got) != 2 {
+	if got := domain.Filter(resolved, domain.Range30D, domain.KindFilterAll, "", now); len(got) != 2 {
 		t.Fatalf("30d filter = %+v", got)
 	}
 }

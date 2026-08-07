@@ -85,7 +85,9 @@ Unknown dates are excluded from every bounded filter. Results are sorted by `add
 
 The initial range on first bootstrap and every later application start is `30d`. Range changes are session state only and are not persisted between runs.
 
-Search is a case-insensitive substring match over package name and description. Search and the active time filter are combined with logical AND.
+A separate package-type filter has `all`, `formula`, `cask`, and `font` states and defaults to `all` on every start. `f` cycles forward through those states and `F` cycles backward. Type changes are session state only and are not persisted.
+
+Search is a case-insensitive substring match over package name and description. Search, the active time range, and the active package type are combined with logical AND.
 
 ## 5. User Experience
 
@@ -97,6 +99,7 @@ The selected wide-terminal design is a split pane.
 
 - application name;
 - time tabs: `7d`, `30d`, `90d`, `1y`, `all`;
+- active package type: `all`, `formula`, `cask`, or `font`;
 - active search query, when present;
 - visible and total package counts;
 - stale or refreshing indicator when applicable.
@@ -106,7 +109,8 @@ The selected wide-terminal design is a split pane.
 - scrollable package list from the current non-disabled index;
 - package name and compact `formula`, `cask`, or `font` badge;
 - newest-first ordering defined in section 4.4;
-- selection retained across filter changes when the selected record remains visible, otherwise moved to the first visible record.
+- selection retained across filter changes when the selected record remains visible, otherwise moved to the first visible record;
+- the selected row vertically centered when possible, using the actual list capacity after header/footer layout. Odd capacities use the exact middle; even capacities use the lower middle. The first and last pages clamp to a full page without blank padding.
 
 **Right pane**
 
@@ -129,6 +133,7 @@ The selected wide-terminal design is a split pane.
 | `up` / `down`, `k` / `j` | Move selection |
 | `1` / `2` / `3` / `4` / `5` | Select `7d` / `30d` / `90d` / `1y` / `all` |
 | `tab` / `shift+tab` | Cycle time ranges forward/backward |
+| `f` / `F` | Cycle package types forward/backward through `all`, `formula`, `cask`, `font` |
 | `/` | Enter search input |
 | `esc` | Close the active modal, leave search input, or clear an existing search |
 | `o` | Open the selected homepage |
@@ -170,6 +175,7 @@ If `brew` is unavailable, browsing and homepage opening continue to work, but in
 - From 50 through 89 columns with at least 12 rows, render the list as the primary single pane and use `enter` to toggle a full-width detail view for the selected package.
 - Below 50 columns or 12 rows, render only an explicit terminal-too-small message and the quit hint.
 - All widths, heights, and wrapping are calculated from Bubble Tea window-size messages; content must not write beyond the terminal bounds.
+- List viewport centering is derived from the current selection and actual body height after every movement, filter, search, refresh, or resize; no independent scroll offset is persisted.
 
 These breakpoint values belong to the UI package as named constants and are fixed by rendering tests rather than user configuration.
 
@@ -464,10 +470,10 @@ A separately named opt-in integration test may validate catalog compatibility an
 1. On first run with network and git available, Brewnicle builds an index from the current official formula/cask APIs and the official core/cask histories, then displays current non-disabled packages.
 2. Formulae, casks, and fonts appear exactly once with the correct kind; removed and API-disabled packages do not appear. Fonts are tagged casks, never duplicates.
 3. Each resolved package uses its earliest known upstream add event across its current/former names and applicable repository; unresolved dates, including unreachable pre-migration font dates, are visibly unknown.
-4. The application opens with `30d` active. Keys `1` through `5` and `tab`/`shift+tab` switch among `7d`, `30d`, `90d`, `1y`, and `all` using the boundary rules in this specification.
-5. Unknown-date packages appear in `all` and in no bounded range.
-6. `/` search filters name and description case-insensitively and combines with the active range.
-7. Wide terminals show the approved split pane; narrow terminals provide list/detail toggling; undersized terminals do not corrupt rendering.
+4. The application opens with `30d` and package type `all` active. Keys `1` through `5` and `tab`/`shift+tab` switch time ranges; `f`/`F` cycle package types forward/backward.
+5. Unknown-date packages appear in time range `all` and in no bounded range.
+6. Package type, time range, and `/` name/description search combine with logical AND; active filters survive refresh and responsive state changes.
+7. Wide terminals show the approved split pane; narrow terminals provide list/detail toggling; undersized terminals do not corrupt rendering. The selected list row is centered when possible using the lower middle for even capacities and full-page clamping at boundaries.
 8. The UI uses only the approved terminal ANSI `1`–`8` role mapping, sets no explicit background, RGB, ANSI-256, or adaptive colors, uses redundant attribute/text cues including reverse video for selection, and removes every color while remaining understandable under `NO_COLOR`.
 9. `o` opens only validated HTTP(S) homepages through the correct OS command without a shell. Missing or invalid homepages retain the package with an empty value and `o` disabled.
 10. `i` shows the exact install command and runs nothing unless confirmed. Confirmed formula installs use `brew install <name>`; cask/font installs use `brew install --cask <token>` with attached stdio, and the TUI resumes afterward.

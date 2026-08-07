@@ -40,14 +40,15 @@ These amendments supersede conflicting wording later in the generated plan:
        - `KindFormula`, `KindCask`, `KindFont`.
        - `Package` with name, kind, description, homepage, nullable addition time, install target, former identifiers, and update time.
        - `Range7D`, `Range30D`, `Range90D`, `Range1Y`, `RangeAll`, with `30d` as the default.
+       - A distinct `KindFilter` with `all`, `formula`, `cask`, and `font`, defaulting to `all`; do not overload package `Kind` with the filter-only `all` state.
        - Stable package identity as `(kind, name)`.
-     - Implement pure filtering, case-insensitive search, UTC boundary handling, and sorting. Unknown dates appear only in `all` and sort after dated records.
+     - Implement pure type/range filtering, case-insensitive search, UTC boundary handling, and sorting. Type, range, and search compose with logical AND. Unknown dates appear only in time range `all` and sort after dated records.
      - Keep `cmd/brewnicle/main.go` minimal but compilable; dependency wiring comes later.
    - Tests:
      - Exact 7/30/90/365-day boundaries using an injected `now`.
      - UTC normalization.
      - Unknown dates in bounded and all-time views.
-     - Combined name/description search and range filtering.
+     - Combined package-type, name/description search, and range filtering, including every type, invalid/default handling, fonts, and empty results.
      - Newest-first ordering and name tie-breaking.
    - Acceptance:
      - `go test ./internal/domain`
@@ -303,18 +304,18 @@ These amendments supersede conflicting wording later in the generated plan:
        - Narrow details.
        - Fatal first-run error.
      - Represent refresh as orthogonal state over browsing; reject duplicate refresh requests.
-     - Default every run to `30d`.
-     - Route `1`–`5`, tab/shift-tab, movement, `/`, escape, `o`, `i`, `r`, `?`, enter, and quit according to the approved ownership rules.
-     - Reapply domain filtering on query/range changes.
+     - Default every run to time range `30d` and package type `all`.
+     - Route `1`–`5`, tab/shift-tab, movement, `f`/`F` package-type cycling, `/`, escape, `o`, `i`, `r`, `?`, enter, and quit according to the approved ownership rules.
+     - Reapply shared domain filtering on query, range, or package-type changes.
      - Retain selection by `(kind, name)` when possible; otherwise select the first result.
      - Keep cached rows visible during refresh.
      - Replace rows in one message after successful publication.
-     - Preserve filters and selection across resize and action completion.
+     - Preserve all filters and selection across refresh replacement, resize, responsive state changes, and action completion.
      - Inject refresh/open/install commands as functions; the model must not perform HTTP, SQL, git, or raw process execution.
    - Tests:
      - Every documented key and state transition.
      - Search escape behavior.
-     - Filter cycling and default range.
+     - Time/type filter cycling, defaults, logical-AND composition, modal key ownership, and selection retention/fallback.
      - Confirmation/cancellation runs nothing until confirmed.
      - Refresh deduplication and stale startup trigger.
      - Selection retention after refresh.
@@ -351,7 +352,8 @@ These amendments supersede conflicting wording later in the generated plan:
      - Render wide split pane with list left and selected package detail right.
      - Render narrow list/detail toggle with enter.
      - Render only a minimum-size message and quit hint when too small.
-     - Show header tabs, query, counts, stale/refresh state; detail fields; exact install command; and context-aware footer.
+     - Show header time tabs, active package type, query, counts, stale/refresh state; detail fields; exact install command; and context-aware footer/help hints for `f`/`F`.
+     - Keep the selected list row vertically centered when possible using actual body capacity: exact middle for odd capacities, lower middle for even capacities, and full-page clamping without blank padding at the first/last boundaries. Derive this purely during rendering so movement, filters, refresh, and resize require no persistent scroll offset.
      - Wrap/truncate using measured Lip Gloss cell widths so no line or total height exceeds the last `WindowSizeMsg`.
      - Use the terminal ANSI palette for a vivid theme without fixed RGB:
        - Map title/selected detail to magenta `5`; focus/ranges/links/selection to cyan `6`; formula/cask/font to blue `4`/magenta `5`/yellow `3`; success/warning/error to green `2`/yellow `3`/red `1`; and secondary text to bright black `8`.
@@ -361,7 +363,7 @@ These amendments supersede conflicting wording later in the generated plan:
      - Keep relative-age formatting deterministic by injecting `now`.
    - Tests:
      - Golden snapshots with color disabled for every required state.
-     - Width/height assertions for exact breakpoint boundaries and long Unicode descriptions.
+     - Width/height assertions for exact breakpoint boundaries, active type indicators, long Unicode descriptions, and first/middle/last centered-row behavior across odd/even/fewer/equal/empty capacities.
      - Structural style tests prove normal mode uses exactly the approved ANSI `1`–`8` roles with no background, and `NO_COLOR` leaves every app/text-input foreground and background unset.
      - Selected rows remain distinguishable through reverse video and test-visible markers.
    - Acceptance:
@@ -453,7 +455,7 @@ These amendments supersede conflicting wording later in the generated plan:
      - Run vet and build the command.
      - Exercise the TUI manually with a temporary prepared fixture index:
        - Wide, narrow, and too-small resize states.
-       - Search and all time filters.
+       - Search, all time filters, package-type cycling, and centered selection at middle/boundary positions.
        - Help and install confirmation cancellation.
        - Missing homepage and missing Homebrew states.
      - If network/time permits, run the opt-in integration tests and a real read-only refresh. Do not run a real package installation as part of automated or smoke validation.

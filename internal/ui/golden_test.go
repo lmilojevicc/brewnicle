@@ -33,6 +33,17 @@ func TestGoldenViews(t *testing.T) {
 	narrowMinDetail := base(50, 12)
 	narrowMinDetail.state = StateNarrowDetail
 	cases["narrow-min-detail"] = narrowMinDetail
+	narrowEmpty := base(50, 12)
+	narrowEmpty.state = StateNarrowDetail
+	narrowEmpty = update(t, narrowEmpty, runeKey("f")) // formula
+	narrowEmpty = update(t, narrowEmpty, runeKey("f")) // cask: no matches
+	if narrowEmpty.State() != StateBrowse {
+		t.Fatal("empty narrow detail did not return to list")
+	}
+	cases["narrow-empty"] = narrowEmpty
+	kindFormula := base(100, 16)
+	kindFormula = update(t, kindFormula, runeKey("f"))
+	cases["kind-formula"] = kindFormula
 	search := base(100, 16)
 	search = update(t, search, runeKey("/"))
 	cases["search"] = search

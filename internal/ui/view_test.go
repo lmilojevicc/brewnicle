@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -111,6 +112,143 @@ func TestVividRoleMapping(t *testing.T) {
 		if _, ok := style.GetForeground().(lipgloss.NoColor); !ok {
 			t.Errorf("%s should inherit terminal foreground", name)
 		}
+	}
+}
+
+func TestRowsCenterSelectionWhenPossible(t *testing.T) {
+	packages := make([]domain.Package, 10)
+	for i := range packages {
+		packages[i] = domain.Package{Name: fmt.Sprintf("p%02d", i), Kind: domain.KindFormula}
+	}
+	for _, tc := range []struct {
+		name, wantName                      string
+		count, height, selected, markerLine int
+	}{
+		{"first clamps", "p00", 10, 5, 0, 0},
+		{"odd middle", "p05", 10, 5, 5, 2},
+		{"last clamps", "p09", 10, 5, 9, 4},
+		{"even lower middle", "p05", 10, 4, 5, 2},
+		{"fewer rows", "p01", 3, 5, 1, 1},
+		{"equal rows", "p04", 5, 5, 4, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(nil, false, false, true, Dependencies{})
+			m.visible = packages[:tc.count]
+			m.selected = tc.selected
+			rows := m.rows(40, tc.height)
+			if len(rows) != min(tc.count, tc.height) {
+				t.Fatalf("rows=%d want %d", len(rows), min(tc.count, tc.height))
+			}
+			for i, row := range rows {
+				if strings.Contains(row, "›") {
+					if i != tc.markerLine || !strings.Contains(row, tc.wantName) {
+						t.Fatalf("selected row %d %q want line %d package %s", i, row, tc.markerLine, tc.wantName)
+					}
+					return
+				}
+			}
+			t.Fatal("no selected marker")
+		})
+	}
+	m := New(nil, false, false, true, Dependencies{})
+	if rows := m.rows(40, 5); len(rows) != 1 || rows[0] != emptyResultsMessage {
+		t.Fatal(rows)
+	}
+	if rows := m.rows(40, 0); rows != nil {
+		t.Fatal(rows)
+	}
+}
+
+func TestKindFilterHeaderFooterHelpAndRole(t *testing.T) {
+	m := New(uiPkgs(), false, false, true, Dependencies{})
+	m = update(t, m, tea.WindowSizeMsg{Width: 50, Height: 12})
+	m = update(t, m, runeKey("f"))
+	for _, want := range []string{"type:formula", "f type"} {
+		if !strings.Contains(m.View(), want) {
+			t.Fatalf("missing %q:\n%s", want, m.View())
+		}
+	}
+	m = update(t, m, runeKey("?"))
+	help := m.View()
+	for _, want := range []string{"f/F  package type forward/back", "? or esc  close help", "q  quit"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("minimum-size help missing %q:\n%s", want, help)
+		}
+	}
+	if lines := strings.Split(help, "\n"); len(lines) > NarrowMinHeight {
+		t.Fatalf("minimum-size help has %d lines", len(lines))
+	}
+	if got := makeStyles(false).kindFilter(domain.KindFilterFormula).GetForeground(); got != lipgloss.Color("4") {
+		t.Fatalf("formula filter role = %#v", got)
+	}
+	if got := makeStyles(false).kindFilter(domain.KindFilterAll).GetForeground(); got != lipgloss.Color("6") {
+		t.Fatalf("all filter role = %#v", got)
+	}
+	if _, ok := makeStyles(true).kindFilter(domain.KindFilterFont).GetForeground().(lipgloss.NoColor); !ok {
+		t.Fatal("NO_COLOR kind filter has color")
+	}
+}
+
+func TestEmptyStateShowsEveryRecoveryAction(t *testing.T) {
+	for _, size := range []tea.WindowSizeMsg{{Width: 100, Height: 16}, {Width: 50, Height: 12}} {
+		m := New([]domain.Package{{Name: "unknown", Kind: domain.KindFormula}}, false, false, true, Dependencies{})
+		m = update(t, m, size)
+		view := m.View()
+		if !strings.Contains(view, emptyResultsMessage) || strings.Contains(view, "No matches:") && strings.Contains(view, "…") {
+			t.Fatalf("%+v clipped recovery copy:\n%s", size, view)
+		}
+		for _, want := range []string{"/ search", "f type", "5 all"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("%+v missing recovery %q:\n%s", size, want, view)
+			}
+		}
+	}
+}
+
+func TestFullViewsCenterSelectionUsingActualBodyCapacity(t *testing.T) {
+	packages := make([]domain.Package, 30)
+	for i := range packages {
+		packages[i] = domain.Package{Name: fmt.Sprintf("p%02d", i), Kind: domain.KindFormula}
+	}
+	for _, tc := range []struct {
+		name                     string
+		width, height            int
+		headerLines, footerLines int
+		configure                func(*Model)
+	}{
+		{name: "wide one-line header and footer", width: 100, height: 20, headerLines: 1, footerLines: 1},
+		{name: "narrow two-line header and footer", width: 50, height: 12, headerLines: 2, footerLines: 2, configure: func(m *Model) {
+			m.state = StateSearch
+			m.input.Focus()
+			m.stale = true
+			m.refreshing = true
+			m.setStatus("status", statusWarning)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(nil, false, false, true, Dependencies{})
+			m = update(t, m, tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
+			m.packages, m.visible, m.selected = packages, packages, 15
+			if tc.configure != nil {
+				tc.configure(&m)
+			}
+			header, footer := m.headerLines(), m.footerLines()
+			if len(header) != tc.headerLines || len(footer) != tc.footerLines {
+				t.Fatalf("header/footer = %d/%d want %d/%d", len(header), len(footer), tc.headerLines, tc.footerLines)
+			}
+			bodyHeight := tc.height - len(header) - len(footer)
+			wantLine := len(header) + min(bodyHeight, len(packages))/2
+			gotLine := -1
+			for i, line := range strings.Split(m.View(), "\n") {
+				if strings.Contains(line, "›") {
+					gotLine = i
+					break
+				}
+			}
+			if gotLine != wantLine {
+				t.Fatalf("selected marker line = %d want %d; body height %d\n%s", gotLine, wantLine, bodyHeight, m.View())
+			}
+		})
 	}
 }
 

@@ -54,6 +54,19 @@ func (s styles) kind(kind domain.Kind) lipgloss.Style {
 	}
 }
 
+func (s styles) kindFilter(filter domain.KindFilter) lipgloss.Style {
+	switch filter {
+	case domain.KindFilterFormula:
+		return s.formula
+	case domain.KindFilterCask:
+		return s.cask
+	case domain.KindFilterFont:
+		return s.font
+	default:
+		return s.accent
+	}
+}
+
 func (s styles) status(level statusLevel) lipgloss.Style {
 	switch level {
 	case statusSuccess:

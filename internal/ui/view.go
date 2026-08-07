@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	WideMinWidth    = 90
-	WideMinHeight   = 16
-	NarrowMinWidth  = 50
-	NarrowMinHeight = 12
+	WideMinWidth        = 90
+	WideMinHeight       = 16
+	NarrowMinWidth      = 50
+	NarrowMinHeight     = 12
+	emptyResultsMessage = "No matches: / search · f type · 5 all"
 )
 
 func isUsableLayout(width, height int) bool {
@@ -86,8 +87,9 @@ func (m Model) headerLines() []string {
 		}
 	}
 	right := strings.Join(rightParts, "  ")
+	kind := "type:" + s.kindFilter(m.kindFilter).Render(m.kindFilter.String())
 	if m.state == StateSearch {
-		primary := s.title.Render("brewnicle") + "  " + m.input.View()
+		primary := s.title.Render("brewnicle") + "  " + kind + "  " + m.input.View()
 		combined := primary + "  " + right
 		if lipgloss.Width(combined) <= m.width {
 			return []string{combined}
@@ -110,33 +112,45 @@ func (m Model) headerLines() []string {
 	if m.query != "" {
 		query = "  " + s.link.Render("/"+m.query)
 	}
-	return []string{truncate(s.title.Render("brewnicle")+"  "+strings.Join(tabs, " ")+query+"  "+right, m.width)}
+	primary := s.title.Render("brewnicle") + "  " + strings.Join(tabs, " ") + query
+	combined := primary + "  " + kind + "  " + right
+	if lipgloss.Width(combined) <= m.width {
+		return []string{combined}
+	}
+	return []string{truncate(primary, m.width), truncate(kind+"  "+right, m.width)}
 }
 
 func (m Model) rows(width, height int) []string {
+	if height <= 0 {
+		return nil
+	}
 	s := makeStyles(m.noColor)
 	out := make([]string, 0, height)
+	visibleCount := min(height, len(m.visible))
 	start := 0
-	if m.selected >= height {
-		start = m.selected - height + 1
+	selected := m.selected
+	if visibleCount > 0 {
+		selected = min(max(selected, 0), len(m.visible)-1)
+		maxStart := max(0, len(m.visible)-visibleCount)
+		start = min(max(selected-visibleCount/2, 0), maxStart)
 	}
-	for i := start; i < len(m.visible) && len(out) < height; i++ {
+	for i := start; i < len(m.visible) && len(out) < visibleCount; i++ {
 		p := m.visible[i]
 		marker := "  "
-		if i == m.selected {
+		if i == selected {
 			marker = "› "
 		}
 		nameWidth := max(6, width-12)
 		prefix := fmt.Sprintf("%s%-*s  ", marker, nameWidth, truncate(p.Name, nameWidth))
 		row := prefix + s.kind(p.Kind).Render(string(p.Kind))
-		if i == m.selected {
+		if i == selected {
 			row = s.selected.Render(prefix + string(p.Kind))
 		}
 		row = truncate(row, width)
 		out = append(out, row)
 	}
 	if len(out) == 0 {
-		out = []string{"No packages match. Try / search or all."}
+		out = []string{emptyResultsMessage}
 	}
 	return out
 }
@@ -171,6 +185,8 @@ func (m Model) narrowView() string {
 	if m.state == StateNarrowDetail {
 		if p, selected := m.selectedPackage(); selected {
 			body = fitLines(detailLines(p, m.width, m.now(), m.deps.Install != nil, s), m.width, bodyHeight)
+		} else {
+			body = fitLines(m.rows(m.width, bodyHeight), m.width, bodyHeight)
 		}
 	} else {
 		body = fitLines(m.rows(m.width, bodyHeight), m.width, bodyHeight)
@@ -198,6 +214,7 @@ func (m Model) footerLines() []string {
 			hints = s.accent.Render("enter details")
 		}
 		hints = appendHint(hints, s.muted.Render("↑/↓ move"), m.width)
+		hints = appendHint(hints, s.accent.Render("f type"), m.width)
 		hints = appendHint(hints, s.link.Render("/ search"), m.width)
 		hints = appendHint(hints, s.muted.Render("q quit"), m.width)
 		if m.deps.Install != nil {
@@ -206,11 +223,16 @@ func (m Model) footerLines() []string {
 		hints = appendHint(hints, s.success.Render("r refresh"), m.width)
 		hints = appendHint(hints, s.muted.Render("? help"), m.width)
 	} else {
-		hints = s.muted.Render("↑/↓ move") + "  " + s.link.Render("/ search") + "  " + s.link.Render("o homepage")
+		hints = s.muted.Render("↑/↓ move")
+		hints = appendHint(hints, s.accent.Render("f type"), m.width)
+		hints = appendHint(hints, s.link.Render("/ search"), m.width)
+		hints = appendHint(hints, s.link.Render("o homepage"), m.width)
 		if m.deps.Install != nil {
-			hints += "  " + s.installPrompt.Render("i install")
+			hints = appendHint(hints, s.installPrompt.Render("i install"), m.width)
 		}
-		hints += "  " + s.success.Render("r refresh") + "  " + s.muted.Render("? help") + "  " + s.muted.Render("q quit")
+		hints = appendHint(hints, s.success.Render("r refresh"), m.width)
+		hints = appendHint(hints, s.muted.Render("? help"), m.width)
+		hints = appendHint(hints, s.muted.Render("q quit"), m.width)
 	}
 	if m.status != "" {
 		return []string{s.status(m.statusLevel).Render(truncate(m.status, m.width)), hints}
@@ -247,7 +269,7 @@ func (m Model) bootstrapView() string {
 
 func (m Model) helpView() string {
 	s := makeStyles(m.noColor)
-	return fitLines([]string{s.title.Render("Brewnicle help"), "", "↑/↓ or j/k  move", "1–5  time range", "tab/shift+tab  cycle range", s.link.Render("/  search"), s.link.Render("o  homepage"), s.installPrompt.Render("i  install (with confirmation)"), s.success.Render("r  refresh"), "enter  narrow details", "? or esc  close help", "q  quit"}, m.width, m.height)
+	return fitLines([]string{s.title.Render("Brewnicle help"), "↑/↓ or j/k  move", "1–5  time range", "tab/shift+tab  cycle range", s.accent.Render("f/F  package type forward/back"), s.link.Render("/  search"), s.link.Render("o  homepage"), s.installPrompt.Render("i  install (with confirmation)"), s.success.Render("r  refresh"), "enter  narrow details", "? or esc  close help", "q  quit"}, m.width, m.height)
 }
 
 func (m Model) confirmView() string {
