@@ -2,76 +2,131 @@ package refresh
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
+
 	"github.com/milo/brewnicle/internal/catalog"
-	"github.com/milo/brewnicle/internal/domain"
 	"github.com/milo/brewnicle/internal/history"
 	"github.com/milo/brewnicle/internal/store"
-	"time"
 )
 
 type Catalog interface {
 	Fetch(context.Context) (catalog.Result, error)
 }
 type History interface {
-	UpdateAll(context.Context, history.ProgressFunc) (map[string]time.Time, map[string]time.Time, error)
+	PrepareAll(context.Context, history.State, history.ProgressFunc) (history.Prepared, error)
+	ReconcilePublished(context.Context, history.Prepared) error
 }
-type Publisher interface {
-	Publish(context.Context, []domain.Package, time.Time) (store.PublishResult, error)
+type Index interface {
+	Load() (store.Snapshot, error)
+	Publish(context.Context, store.PublishInput) (store.PublishResult, error)
 }
 type Service struct {
-	Catalog   Catalog
-	History   History
-	Publisher Publisher
-	Now       func() time.Time
+	Catalog Catalog
+	History History
+	Index   Index
+	Locker  Locker
+	Now     func() time.Time
 }
 
-func (s Service) Run(ctx context.Context, emit func(Progress)) (store.PublishResult, Summary, error) {
-	now := time.Now().UTC()
-	if s.Now != nil {
-		now = s.Now().UTC()
-	}
+type noopLocker struct{}
+
+func (noopLocker) Acquire(context.Context, func()) (ReleaseFunc, error) {
+	return func() error { return nil }, nil
+}
+
+func (s Service) Run(ctx context.Context, emit func(Progress)) (result store.PublishResult, summary Summary, err error) {
 	send := func(p Phase, d string) {
 		if emit != nil {
 			emit(Progress{p, d})
 		}
 	}
+	locker := s.Locker
+	if locker == nil {
+		locker = noopLocker{}
+	}
+	release, err := locker.Acquire(ctx, func() { send(PhaseLock, "waiting for another Brewnicle refresh") })
+	if err != nil {
+		return result, summary, err
+	}
+	published := false
+	defer func() {
+		releaseErr := release()
+		if releaseErr == nil {
+			return
+		}
+		if published {
+			summary.Warning = joinWarning(summary.Warning, fmt.Errorf("index published but refresh lock release failed: %w", releaseErr))
+			err = nil
+		} else {
+			err = errors.Join(err, releaseErr)
+		}
+	}()
+	previous, loadErr := s.Index.Load()
+	if loadErr != nil && !errors.Is(loadErr, store.ErrNotFound) {
+		return result, summary, loadErr
+	}
 	send(PhaseCatalog, "fetching formulae and casks")
 	cat, err := s.Catalog.Fetch(ctx)
 	if err != nil {
-		return store.PublishResult{}, Summary{}, err
+		return result, summary, err
 	}
 	if len(cat.Packages) == 0 {
-		return store.PublishResult{}, Summary{}, fmt.Errorf("catalog contained no eligible packages")
+		return result, summary, fmt.Errorf("catalog contained no eligible packages")
 	}
 	if err = ctx.Err(); err != nil {
-		return store.PublishResult{}, Summary{}, err
+		return result, summary, err
 	}
-	send(PhaseHistory, "updating official histories")
-	core, casks, err := s.History.UpdateAll(ctx, func(d string) { send(PhaseHistory, d) })
+	if previous.SchemaVersion == store.LegacySchemaVersion {
+		send(PhaseHistory, "one-time full history migration using existing Git caches")
+	} else {
+		send(PhaseHistory, "updating official histories")
+	}
+	prepared, err := s.History.PrepareAll(ctx, previous.History, func(d string) { send(PhaseHistory, d) })
 	if err != nil {
-		return store.PublishResult{}, Summary{}, err
+		return result, summary, err
 	}
-	joined := history.Resolve(cat.Packages, core, casks, now)
+	if !prepared.State.CompleteCurrent() {
+		return result, summary, fmt.Errorf("history preparation incomplete")
+	}
+	publishedAt := time.Now().UTC().Truncate(time.Second)
+	if s.Now != nil {
+		publishedAt = s.Now().UTC().Truncate(time.Second)
+	}
+	joined := history.Resolve(cat.Packages, prepared.State.Core.Events, prepared.State.Cask.Events, publishedAt)
 	if err = ctx.Err(); err != nil {
-		return store.PublishResult{}, Summary{}, err
+		return result, summary, err
 	}
 	send(PhasePublish, "publishing index")
-	result, err := s.Publisher.Publish(ctx, joined, now)
+	result, err = s.Index.Publish(ctx, store.PublishInput{Packages: joined, History: prepared.State, RefreshedAt: publishedAt})
 	if err != nil {
-		return store.PublishResult{}, Summary{}, err
+		return result, summary, err
 	}
-	summary := Summary{PackageCount: len(result.Snapshot.Packages), SkippedFormulae: cat.SkippedFormulae, SkippedCasks: cat.SkippedCasks}
+	published = true
+	summary = Summary{PackageCount: len(result.Snapshot.Packages), SkippedFormulae: cat.SkippedFormulae, SkippedCasks: cat.SkippedCasks}
 	if result.Warning != nil {
-		summary.Warning = result.Warning.Error()
+		summary.Warning = joinWarning(summary.Warning, result.Warning)
+	}
+	send(PhaseHistory, "reconciling history pins")
+	if reconcileErr := s.History.ReconcilePublished(ctx, prepared); reconcileErr != nil {
+		summary.Warning = joinWarning(summary.Warning, fmt.Errorf("index published but history pin reconciliation failed: %w", reconcileErr))
 	}
 	send(PhaseDone, "refresh complete")
 	return result, summary, nil
 }
+func joinWarning(existing string, err error) string {
+	if err == nil {
+		return existing
+	}
+	if existing == "" {
+		return err.Error()
+	}
+	return existing + "; " + err.Error()
+}
 func Stale(refreshed, now time.Time) bool {
 	return !now.UTC().Before(refreshed.UTC().Add(24 * time.Hour))
 }
-
 func NeedsRefresh(snapshot store.Snapshot, now time.Time) bool {
-	return snapshot.HistoryLayoutVersion < store.HistoryLayoutVersion || Stale(snapshot.RefreshedAt, now)
+	return snapshot.SchemaVersion < store.CurrentSchemaVersion || snapshot.HistoryLayoutVersion < store.HistoryLayoutVersion || !snapshot.History.CompleteCurrent() || Stale(snapshot.RefreshedAt, now)
 }

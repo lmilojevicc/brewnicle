@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ func newGitFixture(t *testing.T) gitFixture {
 	}
 	fixture := gitFixture{t: t, bin: git, dir: t.TempDir()}
 	fixture.run(nil, "init", "-q")
+	fixture.run(nil, "branch", "-M", "main")
 	fixture.run(nil, "config", "user.email", "test@example.com")
 	fixture.run(nil, "config", "user.name", "Test")
 	return fixture
@@ -45,6 +47,17 @@ func (f gitFixture) commit(date, message string) {
 	f.run([]string{"GIT_AUTHOR_DATE=" + date, "GIT_COMMITTER_DATE=" + date}, "commit", "-qam", message)
 }
 
+func (f gitFixture) oid(ref string) string {
+	f.t.Helper()
+	cmd := exec.Command(f.bin, "rev-parse", ref)
+	cmd.Dir = f.dir
+	out, err := cmd.Output()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func TestScannerAgainstTemporaryGitRepository(t *testing.T) {
 	fixture := newGitFixture(t)
 	if err := os.MkdirAll(filepath.Join(fixture.dir, "Formula"), 0755); err != nil {
@@ -60,7 +73,7 @@ func TestScannerAgainstTemporaryGitRepository(t *testing.T) {
 	}
 	fixture.run(nil, "mv", "Formula/demo.rb", "Formula/d/demo.rb")
 	fixture.commit("2021-01-01T00:00:00Z", "bucket")
-	events, err := (Scanner{Git: fixture.bin}).Scan(context.Background(), filepath.Join(fixture.dir, ".git"), "HEAD", RepoCore)
+	events, err := (Scanner{Git: fixture.bin}).Scan(context.Background(), filepath.Join(fixture.dir, ".git"), Revision{ToOID: fixture.oid("HEAD")}, RepoCore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +110,7 @@ func TestScannerCaskFontFormerNameAndDeleteReadd(t *testing.T) {
 	}
 	fixture.run(nil, "add", ".")
 	fixture.commit("2022-01-01T00:00:00Z", "readd and current names")
-	events, err := (Scanner{Git: fixture.bin}).Scan(context.Background(), filepath.Join(fixture.dir, ".git"), "HEAD", RepoCask)
+	events, err := (Scanner{Git: fixture.bin}).Scan(context.Background(), filepath.Join(fixture.dir, ".git"), Revision{ToOID: fixture.oid("HEAD")}, RepoCask)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +140,7 @@ func TestScannerCurrentLibAndFontPathsAppearInBoundedFilters(t *testing.T) {
 	}
 	coreFixture.run(nil, "add", ".")
 	coreFixture.commit("2026-07-27T12:00:00Z", "add lib formula")
-	coreEvents, err := (Scanner{Git: coreFixture.bin}).Scan(context.Background(), filepath.Join(coreFixture.dir, ".git"), "HEAD", RepoCore)
+	coreEvents, err := (Scanner{Git: coreFixture.bin}).Scan(context.Background(), filepath.Join(coreFixture.dir, ".git"), Revision{ToOID: coreFixture.oid("HEAD")}, RepoCore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +155,7 @@ func TestScannerCurrentLibAndFontPathsAppearInBoundedFilters(t *testing.T) {
 	}
 	caskFixture.run(nil, "add", ".")
 	caskFixture.commit("2026-08-05T12:00:00Z", "add font")
-	caskEvents, err := (Scanner{Git: caskFixture.bin}).Scan(context.Background(), filepath.Join(caskFixture.dir, ".git"), "HEAD", RepoCask)
+	caskEvents, err := (Scanner{Git: caskFixture.bin}).Scan(context.Background(), filepath.Join(caskFixture.dir, ".git"), Revision{ToOID: caskFixture.oid("HEAD")}, RepoCask)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,8 +173,80 @@ func TestScannerCurrentLibAndFontPathsAppearInBoundedFilters(t *testing.T) {
 	}
 }
 
+func TestScannerFullHistoryIncludesHiddenSideBranch(t *testing.T) {
+	f := newGitFixture(t)
+	if err := os.MkdirAll(filepath.Join(f.dir, "Formula"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "Formula", "base.rb"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.run(nil, "add", ".")
+	f.commit("2019-01-01T00:00:00Z", "base")
+	base := f.oid("HEAD")
+	f.run(nil, "checkout", "-qb", "side")
+	if err := os.WriteFile(filepath.Join(f.dir, "Formula", "hidden.rb"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.run(nil, "add", ".")
+	f.commit("2020-01-01T00:00:00Z", "hidden")
+	f.run(nil, "checkout", "-q", "main")
+	f.run([]string{"GIT_AUTHOR_DATE=2021-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2021-01-01T00:00:00Z"}, "merge", "-q", "-s", "ours", "--no-edit", "side")
+	tip := f.oid("HEAD")
+	for _, rev := range []Revision{{ToOID: tip}, {FromOID: base, ToOID: tip}} {
+		events, err := (Scanner{Git: f.bin}).Scan(context.Background(), filepath.Join(f.dir, ".git"), rev, RepoCore)
+		if err != nil || events["hidden"].IsZero() {
+			t.Fatalf("rev=%+v events=%v err=%v", rev, events, err)
+		}
+	}
+}
+
+func TestScannerCombinedMergeResolutionAndNoArtificialAdd(t *testing.T) {
+	f := newGitFixture(t)
+	if err := os.MkdirAll(filepath.Join(f.dir, "Formula"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "Formula", "base.rb"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.run(nil, "add", ".")
+	f.commit("2019-01-01T00:00:00Z", "base")
+	base := f.oid("HEAD")
+	f.run(nil, "checkout", "-qb", "side")
+	if err := os.WriteFile(filepath.Join(f.dir, "Formula", "shared.rb"), []byte("side"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.run(nil, "add", ".")
+	f.commit("2022-01-01T00:00:00Z", "side add")
+	f.run(nil, "checkout", "-q", "main")
+	if err := os.WriteFile(filepath.Join(f.dir, "main.txt"), []byte("main"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.run(nil, "add", ".")
+	f.commit("2020-01-01T00:00:00Z", "main")
+	f.run(nil, "merge", "-q", "--no-commit", "--no-ff", "side")
+	if err := os.WriteFile(filepath.Join(f.dir, "Formula", "resolved.rb"), []byte("merge"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.run(nil, "add", ".")
+	f.commit("2018-01-01T00:00:00Z", "merge resolution")
+	tip := f.oid("HEAD")
+	for _, rev := range []Revision{{ToOID: tip}, {FromOID: base, ToOID: tip}} {
+		events, err := (Scanner{Git: f.bin}).Scan(context.Background(), filepath.Join(f.dir, ".git"), rev, RepoCore)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if events["resolved"].IsZero() {
+			t.Fatalf("resolution add missing: %v", events)
+		}
+		if got := events["shared"]; got.Year() != 2022 {
+			t.Fatalf("merge created artificial earlier add: %v", got)
+		}
+	}
+}
+
 func TestScannerFailedGitCommand(t *testing.T) {
-	_, err := (Scanner{Git: filepath.Join(t.TempDir(), "missing-git")}).Scan(context.Background(), t.TempDir(), "HEAD", RepoCore)
+	_, err := (Scanner{Git: filepath.Join(t.TempDir(), "missing-git")}).Scan(context.Background(), t.TempDir(), Revision{ToOID: strings.Repeat("a", 40)}, RepoCore)
 	if err == nil {
 		t.Fatal("missing git command succeeded")
 	}

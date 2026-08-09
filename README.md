@@ -14,7 +14,11 @@ History scanning recognizes Homebrew's current strict package layouts, including
 
 The first run downloads both API catalogs and app-owned, blob-filter-requested Git history caches. Homebrew’s histories are large: initialization can require substantial network transfer, disk space, and time even though source blobs are not requested. Git servers or clients may ignore filtering. Brewnicle reports phase-level progress and does not promise an exact size or duration.
 
-The app never modifies Homebrew’s own taps. It stores an SQLite index and bare Git caches under the OS user-cache directory (`~/Library/Caches/brewnicle` on macOS, normally `$XDG_CACHE_HOME/brewnicle` or `~/.cache/brewnicle` on Linux). Later starts render the cached index immediately. At startup only, an index at least 24 hours old refreshes in the background; `r` forces refresh. A separate history-layout version also schedules one background refresh when a release improves date resolution, while leaving the older index visible and readable. A failed refresh leaves the prior index usable. The app can browse offline after a successful bootstrap.
+The app never modifies Homebrew’s own taps. It stores an SQLite index and bare Git caches under the OS user-cache directory (`~/Library/Caches/brewnicle` on macOS, normally `$XDG_CACHE_HOME/brewnicle` or `~/.cache/brewnicle` on Linux). Later starts render the cached index immediately. At startup only, an index at least 24 hours old refreshes in the background; `r` forces refresh. A failed refresh leaves the prior index usable. The app can browse offline after a successful bootstrap.
+
+Schema-v1 indexes remain visible while Brewnicle performs one final background CPU-intensive full-history scan to build its incremental history index; this reuses the existing Git caches rather than downloading the repositories again. Full scans and ranges use Git's full reachable-history traversal with combined merge diffs so merged side-branch and merge-resolution additions are retained without inventing merge timestamps. The SQLite generation then stores complete earliest-add aggregates plus the exact published core/cask commit cursors. Subsequent same-tip refreshes perform no history scan, and ordinary updates scan exactly the commits between the published cursor and the new official tip. A rewritten, missing, shallow, corrupt, or algorithm-incompatible repository falls back to a bounded full rebuild of only that repository.
+
+SQLite cursors are authoritative; Git fetched/published refs are repairable object pins. A cache-root file lock serializes refreshes from multiple Brewnicle processes. When another process owns it, the TUI reports that it is waiting and reloads the winning index after acquiring the lock. Failures before database rename preserve the prior generation; directory-sync, ref-reconciliation, or lock-release failures after rename are warnings because the new generation is already active. Legacy `candidate` and `last-good` refs may retain orphaned Git objects on disk after rewritten history until a later cleanup release. UI filters never change backend refresh scope.
 
 ## Keys
 
@@ -57,7 +61,7 @@ gofmt -w $(find cmd internal -name '*.go')
 go test ./...
 go test -race ./...
 go vet ./...
-go build ./cmd/brewnicle
+go build -o /tmp/brewnicle ./cmd/brewnicle
 ```
 
 Live compatibility tests are opt-in and never install packages or clone full histories:

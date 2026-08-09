@@ -323,7 +323,10 @@ func TestRefreshSummaryStaleFeedbackAndSelectionRetention(t *testing.T) {
 	if header := m.header(); !strings.Contains(header, "STALE") || !strings.Contains(header, "refreshing") {
 		t.Fatal(header)
 	}
-	m.selected = 1
+	m.rangeValue = domain.RangeAll
+	m.kindFilter = domain.KindFilterFormula
+	m.input.SetValue("other")
+	m.applyFilter("")
 	selected, _ := m.selectedPackage()
 	replacement := append([]domain.Package(nil), uiPkgs()...)
 	m = update(t, m, refreshEventMsg{Event: RefreshEvent{
@@ -332,8 +335,8 @@ func TestRefreshSummaryStaleFeedbackAndSelectionRetention(t *testing.T) {
 		Summary:  refresh.Summary{SkippedFormulae: 2, SkippedCasks: 3, Warning: "sync warning"},
 	}})
 	got, _ := m.selectedPackage()
-	if got.Key() != selected.Key() {
-		t.Fatalf("selection changed from %s to %s", selected.Key(), got.Key())
+	if got.Key() != selected.Key() || m.rangeValue != domain.RangeAll || m.kindFilter != domain.KindFilterFormula || m.query != "other" {
+		t.Fatalf("refresh changed UI state: selected %s->%s range=%s kind=%s query=%q", selected.Key(), got.Key(), m.rangeValue, m.kindFilter, m.query)
 	}
 	if m.statusLevel != statusWarning {
 		t.Fatal("skipped refresh did not receive warning severity")

@@ -7,11 +7,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type countingGitRunner struct {
 	inner GitRunner
 	calls int
+}
+
+type recordingScanner struct {
+	inner     EventScanner
+	revisions []Revision
+}
+
+func (s *recordingScanner) Scan(ctx context.Context, dir string, rev Revision, repo RepoKind) (map[string]time.Time, error) {
+	s.revisions = append(s.revisions, rev)
+	return s.inner.Scan(ctx, dir, rev, repo)
 }
 
 func (r *countingGitRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
@@ -46,10 +57,13 @@ func TestCacheInitialCloneAndRefreshWithLocalRemote(t *testing.T) {
 	run(src, "add", ".")
 	run(src, "commit", "-qm", "one")
 	run(base, "clone", "-q", "--bare", src, remote)
-	cache := Cache{Root: filepath.Join(base, "cache"), Git: ExecGit{Binary: git}, Scanner: Scanner{Git: git}}
-	events, e := cache.update(context.Background(), "core.git", remote, RepoCore, nil)
-	if e != nil || events["one"].IsZero() {
-		t.Fatal(events, e)
+	recorder := &recordingScanner{inner: Scanner{Git: git}}
+	cache := Cache{Root: filepath.Join(base, "cache"), Git: ExecGit{Binary: git}, Scanner: recorder, remotes: map[RepoKind]string{RepoCore: remote}}
+	update, e := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false)
+	firstTip := update.State.TipOID
+	events := update.State.Events
+	if e != nil || events["one"].IsZero() || update.Mode != ScanFull {
+		t.Fatal(events, update.Mode, e)
 	}
 	// Mutating cached origin must not redirect subsequent fetches. The cache
 	// update always fetches from the explicit authoritative remote argument.
@@ -75,9 +89,38 @@ func TestCacheInitialCloneAndRefreshWithLocalRemote(t *testing.T) {
 	run(src, "add", ".")
 	run(src, "commit", "-qm", "two")
 	run(src, "push", "-q", remote, "main")
-	events, e = cache.update(context.Background(), "core.git", remote, RepoCore, nil)
-	if e != nil || events["two"].IsZero() {
-		t.Fatal(events, e)
+	update, e = cache.prepareRepo(context.Background(), RepoCore, update.State, nil, false)
+	events = update.State.Events
+	if e != nil || events["two"].IsZero() || update.Mode != ScanIncremental {
+		t.Fatal(events, update.Mode, e)
+	}
+	unchanged, unchangedErr := cache.prepareRepo(context.Background(), RepoCore, update.State, nil, false)
+	if unchangedErr != nil || unchanged.Mode != ScanUnchanged || len(unchanged.State.Events) != len(events) {
+		t.Fatal(unchanged.Mode, unchangedErr)
+	}
+	if len(recorder.revisions) != 2 || recorder.revisions[1].FromOID != firstTip || recorder.revisions[1].ToOID != update.State.TipOID {
+		t.Fatalf("expected exact published..fetched range, got %+v", recorder.revisions)
+	}
+	// A non-ancestor official tip replaces, rather than unions, the old aggregate.
+	run(src, "checkout", "-q", "--orphan", "rewritten")
+	if err = os.RemoveAll(filepath.Join(src, "Formula")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Join(src, "Formula"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(src, "Formula", "replacement.rb"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run(src, "add", "-A")
+	run(src, "commit", "-qm", "replacement history")
+	run(src, "push", "-q", "--force", remote, "HEAD:main")
+	rewritten, rewriteErr := cache.prepareRepo(context.Background(), RepoCore, unchanged.State, nil, false)
+	if rewriteErr != nil || rewritten.Mode != ScanFull || rewritten.State.Events["replacement"].IsZero() {
+		t.Fatal(rewritten.Mode, rewritten.State.Events, rewriteErr)
+	}
+	if _, exists := rewritten.State.Events["one"]; exists {
+		t.Fatal("orphaned event retained")
 	}
 	if _, ok := events["evil"]; ok {
 		t.Fatal("fetch followed mutable origin")
@@ -116,8 +159,8 @@ func TestCacheRejectsCommitGraphsSymlinkBeforeRealFetch(t *testing.T) {
 	run(src, "commit", "-qm", "one")
 	run(base, "clone", "-q", "--bare", src, remote)
 
-	cache := Cache{Root: filepath.Join(base, "cache"), Git: ExecGit{Binary: git}, Scanner: Scanner{Git: git}}
-	if _, err = cache.update(context.Background(), "core.git", remote, RepoCore, nil); err != nil {
+	cache := Cache{Root: filepath.Join(base, "cache"), Git: ExecGit{Binary: git}, Scanner: Scanner{Git: git}, remotes: map[RepoKind]string{RepoCore: remote}}
+	if _, err = cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(cache.Root, "core.git")
@@ -147,7 +190,7 @@ func TestCacheRejectsCommitGraphsSymlinkBeforeRealFetch(t *testing.T) {
 
 	counter := &countingGitRunner{inner: ExecGit{Binary: git}}
 	cache.Git = counter
-	if _, err = cache.update(context.Background(), "core.git", remote, RepoCore, nil); err == nil || !strings.Contains(err.Error(), "commit-graphs") {
+	if _, err = cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err == nil || !strings.Contains(err.Error(), "commit-graphs") {
 		t.Fatalf("expected commit-graphs validation failure, got %v", err)
 	}
 	if counter.calls != 0 {

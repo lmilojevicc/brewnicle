@@ -90,7 +90,7 @@ func newApplicationWithHooks(ctx context.Context, cacheRoot string, hooks applic
 	client := catalog.NewClient(&http.Client{Timeout: 2 * time.Minute})
 	historyCache := &history.Cache{Boundary: paths.Root, Root: paths.Git, Git: history.ExecGit{}, Scanner: history.Scanner{}}
 	publisher := store.Publisher{Path: paths.Index}
-	service := refresh.Service{Catalog: client, History: historyCache, Publisher: publisher, Now: hooks.now}
+	service := refresh.Service{Catalog: client, History: historyCache, Index: publisher, Locker: refresh.FileLock{Path: paths.Lock}, Now: hooks.now}
 	starter := func() <-chan ui.RefreshEvent {
 		ch := make(chan ui.RefreshEvent, 16)
 		go func() {

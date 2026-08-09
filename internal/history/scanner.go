@@ -11,30 +11,58 @@ import (
 	"github.com/milo/brewnicle/internal/domain"
 )
 
-func LogArgs(gitDir, ref string, repo RepoKind) []string {
+type Revision struct {
+	FromOID string
+	ToOID   string
+}
+
+func (r Revision) String() (string, error) {
+	if !ValidOID(r.ToOID) {
+		return "", fmt.Errorf("invalid target OID")
+	}
+	if r.FromOID == "" {
+		return r.ToOID, nil
+	}
+	if !ValidOID(r.FromOID) {
+		return "", fmt.Errorf("invalid base OID")
+	}
+	return r.FromOID + ".." + r.ToOID, nil
+}
+
+func LogArgs(gitDir string, rev Revision, repo RepoKind) ([]string, error) {
 	root := "Formula"
 	if repo == RepoCask {
 		root = "Casks"
+	} else if repo != RepoCore {
+		return nil, fmt.Errorf("invalid repository kind %q", repo)
 	}
-	return []string{"--git-dir", gitDir, "log", ref, "--no-renames", "--diff-filter=A", "--format=%x1e%ct", "--name-only", "-z", "--", root}
+	revision, err := rev.String()
+	if err != nil {
+		return nil, err
+	}
+	return []string{"--git-dir", gitDir, "log", "--full-history", "-c", "--no-renames", "--diff-filter=A", "--format=%x1e%ct", "--name-only", "-z", revision, "--", root}, nil
 }
 
 type Scanner struct{ Git string }
 
-func (s Scanner) Scan(ctx context.Context, gitDir, ref string, repo RepoKind) (map[string]time.Time, error) {
+func (s Scanner) Scan(ctx context.Context, gitDir string, rev Revision, repo RepoKind) (map[string]time.Time, error) {
+	args, err := LogArgs(gitDir, rev, repo)
+	if err != nil {
+		return nil, err
+	}
 	git := s.Git
 	if git == "" {
 		git = "git"
 	}
-	cmd := exec.CommandContext(ctx, git, LogArgs(gitDir, ref, repo)...)
+	cmd := exec.CommandContext(ctx, git, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return nil, nonRecoverableError{fmt.Errorf("git log stdout: %w", err)}
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &limitedWriter{w: &stderr, n: 8192}
 	if err = cmd.Start(); err != nil {
-		return nil, err
+		return nil, nonRecoverableError{newCommandError(args, nil, err)}
 	}
 	events, parseErr := ParseLog(stdout, repo)
 	if parseErr != nil {
@@ -42,10 +70,16 @@ func (s Scanner) Scan(ctx context.Context, gitDir, ref string, repo RepoKind) (m
 	}
 	waitErr := cmd.Wait()
 	if parseErr != nil {
-		return nil, parseErr
+		return nil, nonRecoverableError{parseErr}
 	}
 	if waitErr != nil {
-		return nil, fmt.Errorf("git log: %w: %s", waitErr, stderr.String())
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, newCommandError(args, stderr.Bytes(), waitErr)
+	}
+	if rev.FromOID == "" && len(events) == 0 {
+		return nil, fmt.Errorf("full history scan contained no valid package events")
 	}
 	return events, nil
 }
@@ -84,6 +118,7 @@ func Resolve(packages []domain.Package, core, casks map[string]time.Time, update
 				earliest = t
 			}
 		}
+		p.AddedAt = nil
 		if !earliest.IsZero() {
 			u := earliest.UTC()
 			p.AddedAt = &u

@@ -3,6 +3,7 @@ package refresh
 type Phase string
 
 const (
+	PhaseLock    Phase = "lock"
 	PhaseCatalog Phase = "catalog"
 	PhaseHistory Phase = "history"
 	PhasePublish Phase = "publish"

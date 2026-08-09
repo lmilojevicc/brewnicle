@@ -493,3 +493,13 @@ A separately named opt-in integration test may validate catalog compatibility an
 6. Build the Bubble Tea model and states, then the approved split/narrow views and terminal-native styles.
 7. Wire bootstrap, cached startup, refresh, and action flows in the executable.
 8. Run full tests and vet, then perform a manual read-only browse/refresh smoke test before separately confirming any real install action.
+
+## Incremental History Refresh Amendment (2026-08-09)
+
+The active SQLite generation is the authoritative refresh checkpoint. Schema v2 retains current enabled package rows plus a complete per-repository `history_events` earliest-add aggregate and exact `history_repos` core/cask commit cursors. Removed identifiers remain in the aggregate for future re-add and former-name resolution, but never appear in the current package list.
+
+A valid schema-v1 index remains readable and visible while one background migration performs the final CPU-intensive complete scan using the existing app-owned Git caches. Migration failure leaves schema v1 active. For a complete current schema-v2 state, an unchanged official tip performs no history log; a normal fast-forward scans exactly `old_oid..new_oid` and merges timestamps with `MIN`; a non-ancestor, missing object, shallow/corrupt repository, or algorithm mismatch fully rebuilds only the affected repository from the current official reachable history. Full and incremental scans use immutable OIDs, strict NUL framing, `--full-history`, and combined merge diff semantics so reachable side-branch and merge-resolution additions are retained without assigning artificial merge timestamps.
+
+Fetched and published Git refs are object pins and recovery aids, not database cursors. Packages, both complete aggregates, both exact cursors, versions, and the publication timestamp are written to a validated sibling database and become active at atomic rename. Pre-rename failure preserves the previous generation. Directory-sync, post-publication ref reconciliation, or lock-release failure is reported as a warning and does not misreport the visible new generation as rolled back. Compatibility `candidate` and `last-good` refs can retain orphaned objects after rewritten history until a later cleanup change.
+
+A macOS/Linux OS file lock covers active-index reload, catalog fetch, both repository preparations, publication, and ref reconciliation. Concurrent processes report that they are waiting, then reload the winning generation after acquiring the lock rather than publishing competing work from a stale base. The publication timestamp is captured at SQLite whole-second precision after history preparation. UI time/type/search state never enters the refresh service or alters history scope.

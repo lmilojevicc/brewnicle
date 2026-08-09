@@ -21,6 +21,7 @@ func ParseLog(r io.Reader, repo RepoKind) (map[string]time.Time, error) {
 	var current time.Time
 	haveCommit := false
 	needFirstPath := false
+	combinedNames := false
 	for {
 		tok, done, err := readNULTerminated(br)
 		if err != nil {
@@ -30,6 +31,14 @@ func ParseLog(r io.Reader, repo RepoKind) (map[string]time.Time, error) {
 			break
 		}
 		if len(tok) == 0 {
+			// Combined merge output inserts an empty NUL token before its name
+			// list. A following path has no structural LF; a following header (or
+			// EOF) means the merge had no relevant paths.
+			if needFirstPath {
+				needFirstPath = false
+				combinedNames = true
+				continue
+			}
 			return nil, fmt.Errorf("empty token in git log")
 		}
 		if tok[0] == recordSep {
@@ -55,12 +64,18 @@ func ParseLog(r io.Reader, repo RepoKind) (map[string]time.Time, error) {
 			current = time.Unix(sec, 0).UTC()
 			haveCommit = true
 			needFirstPath = true
+			combinedNames = false
 			continue
 		}
 		if !haveCommit {
 			return nil, fmt.Errorf("path before commit header")
 		}
-		if needFirstPath {
+		if combinedNames {
+			if tok[0] == '\n' {
+				return nil, fmt.Errorf("combined path has regular framing newline")
+			}
+			combinedNames = false
+		} else if needFirstPath {
 			if tok[0] != '\n' {
 				return nil, fmt.Errorf("missing path framing newline")
 			}
@@ -80,7 +95,7 @@ func ParseLog(r io.Reader, repo RepoKind) (map[string]time.Time, error) {
 		}
 	}
 	if !haveCommit {
-		return nil, fmt.Errorf("no commit headers in git output")
+		return out, nil
 	}
 	if needFirstPath {
 		return nil, fmt.Errorf("commit header without a path")

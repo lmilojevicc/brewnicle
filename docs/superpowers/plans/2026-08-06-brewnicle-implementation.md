@@ -573,3 +573,6 @@ Recommended implementation checkpoints:
 - **Upstream schema drift:** Minimal JSON structs tolerate added fields, while status, size, required identifiers, and canonical formats remain validated. Live tests stay opt-in.
 - **Unknown font dates:** Current nested font-cask paths are supported and live-validated. The deleted historical fonts repository is intentionally not required; fonts without reachable cask history still remain unknown and appear only in `all`.
 - **Scope expansion:** Do not add third-party taps, dependency views, installed-package management, release automation, a hosted index, or a real-install smoke test.
+## Incremental Refresh Superseding Amendment (2026-08-09)
+
+The original full-scan-on-refresh history tasks are superseded by `docs/superpowers/plans/2026-08-09-incremental-history-refresh.md`. Final implementation uses schema v2 `history_events`/`history_repos`, DB-authoritative immutable cursors, exact ancestor ranges, unchanged-tip no-op scans, per-repository rewrite/recovery fallback, atomic whole-generation publication, and a Darwin/Linux cache-root file lock. Schema-v1 packages remain visible during the one-time background migration. Legacy candidate/last-good refs are compatibility pins only and are no longer advanced or used as cursors.

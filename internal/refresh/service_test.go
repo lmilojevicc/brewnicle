@@ -2,13 +2,19 @@ package refresh
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/milo/brewnicle/internal/catalog"
 	"github.com/milo/brewnicle/internal/domain"
 	"github.com/milo/brewnicle/internal/history"
 	"github.com/milo/brewnicle/internal/store"
-	"testing"
-	"time"
 )
 
 type fakeCat struct{ err error }
@@ -18,62 +24,363 @@ func (f fakeCat) Fetch(context.Context) (catalog.Result, error) {
 }
 
 type fakeHist struct {
-	called *bool
-	err    error
+	prepared       history.Prepared
+	err, reconcile error
+	called         *bool
+	onPrepare      func(history.State)
 }
 
-func (f fakeHist) UpdateAll(context.Context, history.ProgressFunc) (map[string]time.Time, map[string]time.Time, error) {
-	*f.called = true
-	return map[string]time.Time{"old": time.Unix(1, 0)}, map[string]time.Time{}, f.err
+func (f fakeHist) PrepareAll(_ context.Context, previous history.State, _ history.ProgressFunc) (history.Prepared, error) {
+	if f.called != nil {
+		*f.called = true
+	}
+	if f.onPrepare != nil {
+		f.onPrepare(previous)
+	}
+	return f.prepared, f.err
+}
+func (f fakeHist) ReconcilePublished(context.Context, history.Prepared) error { return f.reconcile }
+
+type captureHist struct {
+	prepared history.Prepared
+	seen     *history.State
 }
 
-type fakePub struct{ called *bool }
-
-func (f fakePub) Publish(_ context.Context, p []domain.Package, n time.Time) (store.PublishResult, error) {
-	*f.called = true
-	return store.PublishResult{Snapshot: store.Snapshot{Packages: p, RefreshedAt: n}}, nil
+func (f captureHist) PrepareAll(_ context.Context, previous history.State, _ history.ProgressFunc) (history.Prepared, error) {
+	if f.seen != nil {
+		*f.seen = previous
+	}
+	return f.prepared, nil
 }
-func TestService(t *testing.T) {
-	h, p := false, false
-	s := Service{Catalog: fakeCat{}, History: fakeHist{&h, nil}, Publisher: fakePub{&p}, Now: func() time.Time { return time.Unix(2, 0) }}
+func (captureHist) ReconcilePublished(context.Context, history.Prepared) error { return nil }
+
+type fakeLocker struct {
+	releaseErr error
+	onAcquire  func()
+}
+
+func (f fakeLocker) Acquire(context.Context, func()) (ReleaseFunc, error) {
+	if f.onAcquire != nil {
+		f.onAcquire()
+	}
+	return func() error { return f.releaseErr }, nil
+}
+
+type fakeIndex struct {
+	snapshot            store.Snapshot
+	loadErr, publishErr error
+	published           *store.PublishInput
+	onLoad              func()
+}
+
+func (f *fakeIndex) Load() (store.Snapshot, error) {
+	if f.onLoad != nil {
+		f.onLoad()
+	}
+	return f.snapshot, f.loadErr
+}
+func (f *fakeIndex) Publish(_ context.Context, in store.PublishInput) (store.PublishResult, error) {
+	if f.published != nil {
+		*f.published = in
+	}
+	if f.publishErr != nil {
+		return store.PublishResult{}, f.publishErr
+	}
+	return store.PublishResult{Snapshot: store.Snapshot{SchemaVersion: 2, Packages: in.Packages, RefreshedAt: in.RefreshedAt, HistoryLayoutVersion: store.HistoryLayoutVersion, History: in.History}}, nil
+}
+func completePrepared() history.Prepared {
+	state := history.State{Core: history.RepoState{Repo: history.RepoCore, RemoteURL: history.CoreRemote, BranchRef: "refs/heads/main", TipOID: strings.Repeat("a", 40), AlgorithmVersion: history.AlgorithmVersion, Complete: true, Events: map[string]time.Time{"old": time.Unix(1, 0)}}, Cask: history.RepoState{Repo: history.RepoCask, RemoteURL: history.CaskRemote, BranchRef: "refs/heads/main", TipOID: strings.Repeat("b", 40), AlgorithmVersion: history.AlgorithmVersion, Complete: true, Events: map[string]time.Time{"c": time.Unix(1, 0)}}}
+	return history.Prepared{State: state}
+}
+
+func writeLegacyIndex(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		`CREATE TABLE packages(name TEXT NOT NULL,kind TEXT NOT NULL,description TEXT NOT NULL,homepage TEXT NOT NULL,added_at INTEGER,install_target TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(kind,name))`,
+		`CREATE TABLE metadata(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL)`,
+		`INSERT INTO packages(name,kind,description,homepage,added_at,install_target,updated_at) VALUES('legacy','formula','old','','1','legacy','1')`,
+		`INSERT INTO metadata(key,value) VALUES('schema_version','1'),('last_successful_refresh','1'),('history_layout_version','2')`,
+	} {
+		if _, err = db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+type blockingHist struct {
+	started  chan struct{}
+	release  chan struct{}
+	prepared history.Prepared
+	err      error
+}
+
+func (h *blockingHist) PrepareAll(context.Context, history.State, history.ProgressFunc) (history.Prepared, error) {
+	close(h.started)
+	<-h.release
+	return h.prepared, h.err
+}
+func (*blockingHist) ReconcilePublished(context.Context, history.Prepared) error { return nil }
+
+type migrationHist struct {
+	state     history.State
+	fullScans int
+}
+
+func (h *migrationHist) PrepareAll(_ context.Context, previous history.State, _ history.ProgressFunc) (history.Prepared, error) {
+	if !previous.CompleteCurrent() {
+		h.fullScans += 2
+		return history.Prepared{State: history.CloneState(h.state)}, nil
+	}
+	return history.Prepared{State: history.CloneState(previous)}, nil
+}
+func (*migrationHist) ReconcilePublished(context.Context, history.Prepared) error { return nil }
+func TestSecondServiceReloadsFirstPublishedGenerationUnderSharedLock(t *testing.T) {
+	root := t.TempDir()
+	idx := store.Publisher{Path: filepath.Join(root, "index.db")}
+	lock := FileLock{Path: filepath.Join(root, "refresh.lock")}
+	prepared := completePrepared()
+	first := Service{Catalog: fakeCat{}, History: fakeHist{prepared: prepared}, Index: idx, Locker: lock, Now: func() time.Time { return time.Unix(2, 0) }}
+	if _, _, err := first.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var seen history.State
+	second := Service{Catalog: fakeCat{}, History: captureHist{prepared: prepared, seen: &seen}, Index: idx, Locker: lock, Now: func() time.Time { return time.Unix(3, 0) }}
+	if _, _, err := second.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if seen.Core.TipOID != prepared.State.Core.TipOID || seen.Cask.TipOID != prepared.State.Cask.TipOID {
+		t.Fatal("second service did not observe first publication")
+	}
+}
+
+func TestServiceAcquiresLockBeforeReload(t *testing.T) {
+	locked := false
+	idx := &fakeIndex{loadErr: store.ErrNotFound, onLoad: func() {
+		if !locked {
+			t.Fatal("index loaded before lock acquisition")
+		}
+	}}
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: completePrepared()}, Index: idx, Locker: fakeLocker{onAcquire: func() { locked = true }}, Now: func() time.Time { return time.Unix(2, 0) }}
+	if _, _, err := s.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceRealPublisherNormalizesClockPrecision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	idx := store.Publisher{Path: path}
+	clock := time.Unix(20, 123456789)
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: completePrepared()}, Index: idx, Now: func() time.Time { return clock }}
+	r, _, err := s.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := idx.Load()
+	if err != nil || got.RefreshedAt.Nanosecond() != 0 || got.RefreshedAt.Unix() != 20 || r.Snapshot.Packages[0].UpdatedAt.Nanosecond() != 0 || r.Snapshot.Packages[0].UpdatedAt.Unix() != 20 {
+		t.Fatal(got.RefreshedAt, r.Snapshot.Packages[0].UpdatedAt, err)
+	}
+}
+
+func TestLegacyMigrationProgressIsExplicit(t *testing.T) {
+	idx := &fakeIndex{snapshot: store.Snapshot{SchemaVersion: store.LegacySchemaVersion, Packages: []domain.Package{{Name: "old", Kind: domain.KindFormula}}}}
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: completePrepared()}, Index: idx, Now: func() time.Time { return time.Unix(2, 0) }}
+	var details []string
+	if _, _, err := s.Run(context.Background(), func(p Progress) { details = append(details, p.Detail) }); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(details, "\n"), "one-time full history migration") {
+		t.Fatal(details)
+	}
+}
+
+func TestServicePublishesCompleteGeneration(t *testing.T) {
+	called := false
+	var published store.PublishInput
+	idx := &fakeIndex{loadErr: store.ErrNotFound, published: &published}
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: completePrepared(), called: &called}, Index: idx, Now: func() time.Time { return time.Unix(2, 0) }}
 	r, sum, e := s.Run(context.Background(), nil)
-	if e != nil || !h || !p || sum.SkippedFormulae != 2 || r.Snapshot.Packages[0].AddedAt == nil {
+	if e != nil || !called || sum.SkippedFormulae != 2 || r.Snapshot.Packages[0].AddedAt == nil || !published.History.CompleteCurrent() || published.RefreshedAt.Unix() != 2 {
 		t.Fatal(r, sum, e)
 	}
 }
-func TestFailureStopsPipeline(t *testing.T) {
-	h, p := false, false
-	s := Service{Catalog: fakeCat{errors.New("no")}, History: fakeHist{&h, nil}, Publisher: fakePub{&p}}
-	if _, _, e := s.Run(context.Background(), nil); e == nil || h || p {
-		t.Fatal(e, h, p)
+func TestFailureStopsBeforeHistory(t *testing.T) {
+	called := false
+	s := Service{Catalog: fakeCat{err: errors.New("no")}, History: fakeHist{called: &called}, Index: &fakeIndex{loadErr: store.ErrNotFound}}
+	if _, _, e := s.Run(context.Background(), nil); e == nil || called {
+		t.Fatal(e, called)
 	}
 }
+func TestPostPublishReleaseWarningKeepsPublishedRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	idx := store.Publisher{Path: path}
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: completePrepared()}, Index: idx, Locker: fakeLocker{releaseErr: errors.New("unlock")}, Now: func() time.Time { return time.Unix(20, 5) }}
+	r, sum, e := s.Run(context.Background(), nil)
+	loaded, loadErr := idx.Load()
+	if e != nil || loadErr != nil || len(r.Snapshot.Packages) == 0 || len(loaded.Packages) == 0 || !strings.Contains(sum.Warning, "unlock") {
+		t.Fatal(r, sum, e, loadErr)
+	}
+}
+
+func TestPrePublishReleaseFailureJoinsRefreshError(t *testing.T) {
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: completePrepared()}, Index: &fakeIndex{loadErr: store.ErrNotFound, publishErr: errors.New("publish")}, Locker: fakeLocker{releaseErr: errors.New("unlock")}}
+	_, _, err := s.Run(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "publish") || !strings.Contains(err.Error(), "unlock") {
+		t.Fatal(err)
+	}
+}
+
+func TestPostPublishReconcileWarning(t *testing.T) {
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: completePrepared(), reconcile: errors.New("ref")}, Index: &fakeIndex{loadErr: store.ErrNotFound}}
+	r, sum, e := s.Run(context.Background(), nil)
+	if e != nil || len(r.Snapshot.Packages) == 0 || !strings.Contains(sum.Warning, "ref") {
+		t.Fatal(r, sum, e)
+	}
+}
+func TestLegacyIndexRemainsVisibleWhileMigrationBlocksAndFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	writeLegacyIndex(t, path)
+	idx := store.Publisher{Path: path}
+	hist := &blockingHist{started: make(chan struct{}), release: make(chan struct{}), err: errors.New("migration failed")}
+	s := Service{Catalog: fakeCat{}, History: hist, Index: idx, Now: func() time.Time { return time.Unix(2, 0) }}
+	finished := make(chan error, 1)
+	go func() {
+		_, _, err := s.Run(context.Background(), nil)
+		finished <- err
+	}()
+	select {
+	case <-hist.started:
+	case <-time.After(time.Second):
+		t.Fatal("migration did not start")
+	}
+	loaded, err := idx.Load()
+	if err != nil || loaded.SchemaVersion != store.LegacySchemaVersion || len(loaded.Packages) != 1 || loaded.Packages[0].Name != "legacy" {
+		t.Fatal(loaded, err)
+	}
+	close(hist.release)
+	if err = <-finished; err == nil || !strings.Contains(err.Error(), "migration failed") {
+		t.Fatal(err)
+	}
+	loaded, err = idx.Load()
+	if err != nil || loaded.SchemaVersion != store.LegacySchemaVersion || loaded.Packages[0].Name != "legacy" {
+		t.Fatal(loaded, err)
+	}
+}
+
+func TestSuccessfulLegacyMigrationThenSameTipAvoidsAnotherFullScan(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	writeLegacyIndex(t, path)
+	idx := store.Publisher{Path: path}
+	hist := &migrationHist{state: completePrepared().State}
+	s := Service{Catalog: fakeCat{}, History: hist, Index: idx, Now: func() time.Time { return time.Unix(2, 0) }}
+	if _, _, err := s.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	s.Now = func() time.Time { return time.Unix(3, 0) }
+	if _, _, err := s.Run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := idx.Load()
+	if err != nil || loaded.SchemaVersion != store.CurrentSchemaVersion || hist.fullScans != 2 {
+		t.Fatal(loaded.SchemaVersion, hist.fullScans, err)
+	}
+}
+
+func TestPublicationClockIsCapturedAfterHistoryPreparation(t *testing.T) {
+	prepared := false
+	clockAfterPrepare := false
+	hist := fakeHist{prepared: completePrepared(), onPrepare: func(history.State) { prepared = true }}
+	s := Service{
+		Catalog: fakeCat{}, History: hist, Index: &fakeIndex{loadErr: store.ErrNotFound},
+		Now: func() time.Time {
+			clockAfterPrepare = prepared
+			return time.Unix(20, 987654321)
+		},
+	}
+	r, _, err := s.Run(context.Background(), nil)
+	if err != nil || !clockAfterPrepare || r.Snapshot.RefreshedAt.Unix() != 20 || r.Snapshot.RefreshedAt.Nanosecond() != 0 {
+		t.Fatal(clockAfterPrepare, r.Snapshot.RefreshedAt, err)
+	}
+}
+
+func TestRestartLoadsPublishedSnapshotAndRepairsMissingRefs(t *testing.T) {
+	root := t.TempDir()
+	idx := store.Publisher{Path: filepath.Join(root, "index.db")}
+	state := completePrepared().State
+	publishedAt := time.Unix(20, 0)
+	packages := history.Resolve(fakeCatPackages(), state.Core.Events, state.Cask.Events, publishedAt)
+	if _, err := idx.Publish(context.Background(), store.PublishInput{Packages: packages, History: state, RefreshedAt: publishedAt}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := idx.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"core.git", "cask.git"} {
+		if err = os.MkdirAll(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[history.RepoKind][]string{}
+	cache := history.Cache{Root: root, Git: refreshGitRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 3 && args[2] == "update-ref" {
+			repo := history.RepoCore
+			if strings.Contains(args[1], "cask.git") {
+				repo = history.RepoCask
+			}
+			seen[repo] = append([]string(nil), args...)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected args %v", args)
+	})}
+	preparedState := history.Prepared{State: loaded.History, Updates: [2]history.RepoUpdate{
+		{State: loaded.History.Core, PublishedExpectation: history.RefExpectation{ExpectedOID: loaded.History.Core.TipOID}},
+		{State: loaded.History.Cask},
+	}}
+	if err = cache.ReconcilePublished(context.Background(), preparedState); err != nil {
+		t.Fatal(err)
+	}
+	if got := seen[history.RepoCore]; len(got) == 0 || got[len(got)-1] != loaded.History.Core.TipOID {
+		t.Fatal(got)
+	}
+	if got := seen[history.RepoCask]; len(got) == 0 || got[len(got)-1] != strings.Repeat("0", len(loaded.History.Cask.TipOID)) {
+		t.Fatal(got)
+	}
+}
+
+func fakeCatPackages() []domain.Package {
+	return []domain.Package{{Name: "new", Kind: domain.KindFormula, FormerNames: []string{"old"}}}
+}
+
+type refreshGitRunner func(context.Context, string, ...string) ([]byte, error)
+
+func (f refreshGitRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return f(ctx, dir, args...)
+}
+
 func TestStaleBoundary(t *testing.T) {
 	a := time.Unix(1, 0)
 	if Stale(a, a.Add(24*time.Hour-time.Nanosecond)) || !Stale(a, a.Add(24*time.Hour)) {
 		t.Fatal()
 	}
 }
-
-func TestNeedsRefreshIncludesHistoryLayoutVersion(t *testing.T) {
+func TestNeedsRefreshMigrationAndHistory(t *testing.T) {
 	now := time.Unix(100000, 0)
 	fresh := now.Add(-time.Hour)
-	for _, tc := range []struct {
-		name    string
-		version int
-		age     time.Time
-		want    bool
-	}{
-		{"legacy missing", 0, fresh, true},
-		{"old", store.HistoryLayoutVersion - 1, fresh, true},
-		{"current fresh", store.HistoryLayoutVersion, fresh, false},
-		{"future fresh", store.HistoryLayoutVersion + 1, fresh, false},
-		{"current stale", store.HistoryLayoutVersion, now.Add(-24 * time.Hour), true},
-	} {
+	complete := completePrepared().State
+	cases := []struct {
+		name string
+		s    store.Snapshot
+		want bool
+	}{{"v1", store.Snapshot{SchemaVersion: 1, RefreshedAt: fresh}, true}, {"v2 incomplete", store.Snapshot{SchemaVersion: 2, RefreshedAt: fresh}, true}, {"v2 fresh", store.Snapshot{SchemaVersion: 2, RefreshedAt: fresh, HistoryLayoutVersion: store.HistoryLayoutVersion, History: complete}, false}, {"v2 stale", store.Snapshot{SchemaVersion: 2, RefreshedAt: now.Add(-24 * time.Hour), HistoryLayoutVersion: store.HistoryLayoutVersion, History: complete}, true}}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			snapshot := store.Snapshot{RefreshedAt: tc.age, HistoryLayoutVersion: tc.version}
-			if got := NeedsRefresh(snapshot, now); got != tc.want {
-				t.Fatalf("NeedsRefresh()=%v want %v", got, tc.want)
+			if got := NeedsRefresh(tc.s, now); got != tc.want {
+				t.Fatalf("%v", got)
 			}
 		})
 	}

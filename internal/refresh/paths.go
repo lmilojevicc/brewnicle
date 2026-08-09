@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-type Paths struct{ Root, Index, Git string }
+type Paths struct{ Root, Index, Git, Lock string }
 
 func ResolvePaths(root string) (Paths, error) {
 	var err error
@@ -38,7 +38,7 @@ func ResolvePaths(root string) (Paths, error) {
 	if err = makeCacheRoot(abs); err != nil {
 		return Paths{}, err
 	}
-	return Paths{Root: abs, Index: filepath.Join(abs, "index.db"), Git: filepath.Join(abs, "git")}, nil
+	return Paths{Root: abs, Index: filepath.Join(abs, "index.db"), Git: filepath.Join(abs, "git"), Lock: filepath.Join(abs, "refresh.lock")}, nil
 }
 
 // makeCacheRoot refuses the caller-controlled final path and its immediate

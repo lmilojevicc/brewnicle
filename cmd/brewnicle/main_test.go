@@ -6,13 +6,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/milo/brewnicle/internal/domain"
+	"github.com/milo/brewnicle/internal/history"
 	"github.com/milo/brewnicle/internal/store"
 	"github.com/milo/brewnicle/internal/ui"
 )
@@ -45,42 +45,20 @@ func TestMissingIndexStartsBootstrapAfterVisibleFrame(t *testing.T) {
 func TestFreshAndStaleIndexStartupIntent(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		name             string
-		refreshed        time.Time
-		metadataOverride *string
-		stale            bool
+		name      string
+		refreshed time.Time
+		stale     bool
 	}{
-		{"fresh current", now.Add(-23 * time.Hour), nil, false},
-		{"stale current", now.Add(-24 * time.Hour), nil, true},
-		{"fresh legacy", now.Add(-23 * time.Hour), stringPointer(""), true},
-		{"fresh old", now.Add(-23 * time.Hour), stringPointer(strconv.Itoa(store.HistoryLayoutVersion - 1)), true},
-		{"fresh future", now.Add(-23 * time.Hour), stringPointer(strconv.Itoa(store.HistoryLayoutVersion + 1)), false},
-		{"fresh invalid", now.Add(-23 * time.Hour), stringPointer("invalid"), true},
+		{"fresh current", now.Add(-23 * time.Hour), false},
+		{"stale current", now.Add(-24 * time.Hour), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "cache")
 			added := now.Add(-time.Hour)
 			packages := []domain.Package{{Name: "x", Kind: domain.KindFormula, InstallTarget: "x", AddedAt: &added, UpdatedAt: now}}
 			indexPath := filepath.Join(root, "index.db")
-			if _, err := (store.Publisher{Path: indexPath}).Publish(context.Background(), packages, tc.refreshed); err != nil {
+			if err := publishTestIndex(indexPath, packages, tc.refreshed); err != nil {
 				t.Fatal(err)
-			}
-			if tc.metadataOverride != nil {
-				db, err := sql.Open("sqlite", indexPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if *tc.metadataOverride == "" {
-					_, err = db.Exec(`DELETE FROM metadata WHERE key='history_layout_version'`)
-				} else {
-					_, err = db.Exec(`INSERT OR REPLACE INTO metadata(key,value) VALUES('history_layout_version',?)`, *tc.metadataOverride)
-				}
-				if closeErr := db.Close(); err == nil {
-					err = closeErr
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
 			}
 			m, err := newApplicationWithHooks(context.Background(), root, testHooks(now))
 			if err != nil || m.State() != ui.StateBrowse || m.Stale() != tc.stale || m.PendingRefresh() != tc.stale {
@@ -90,7 +68,50 @@ func TestFreshAndStaleIndexStartupIntent(t *testing.T) {
 	}
 }
 
-func stringPointer(value string) *string { return &value }
+func publishTestIndex(path string, packages []domain.Package, at time.Time) error {
+	coreEvents := map[string]time.Time{"core-placeholder": time.Unix(1, 0)}
+	caskEvents := map[string]time.Time{"cask-placeholder": time.Unix(1, 0)}
+	for _, pkg := range packages {
+		if pkg.Kind == domain.KindFormula {
+			coreEvents[pkg.Name] = at
+		} else {
+			caskEvents[pkg.Name] = at
+		}
+	}
+	state := history.State{
+		Core: history.RepoState{Repo: history.RepoCore, RemoteURL: history.CoreRemote, BranchRef: "refs/heads/main", TipOID: strings.Repeat("a", 40), AlgorithmVersion: history.AlgorithmVersion, Complete: true, Events: coreEvents},
+		Cask: history.RepoState{Repo: history.RepoCask, RemoteURL: history.CaskRemote, BranchRef: "refs/heads/main", TipOID: strings.Repeat("b", 40), AlgorithmVersion: history.AlgorithmVersion, Complete: true, Events: caskEvents},
+	}
+	_, err := (store.Publisher{Path: path}).Publish(context.Background(), store.PublishInput{Packages: packages, History: state, RefreshedAt: at})
+	return err
+}
+
+func TestLegacyV1IndexRemainsVisibleDuringBackgroundMigration(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "index.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE packages(name TEXT NOT NULL,kind TEXT NOT NULL,description TEXT NOT NULL,homepage TEXT NOT NULL,added_at INTEGER,install_target TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(kind,name)); CREATE TABLE metadata(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL); INSERT INTO packages VALUES('legacy','formula','visible','','1','legacy','2'); INSERT INTO metadata VALUES('schema_version','1'),('last_successful_refresh','3'),('history_layout_version','2');`)
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := newApplicationWithHooks(context.Background(), root, testHooks(time.Unix(100, 0)))
+	if err != nil || m.State() != ui.StateBrowse || !m.PendingRefresh() || !m.Stale() {
+		t.Fatal(m.State(), m.PendingRefresh(), m.Stale(), err)
+	}
+	snapshot, err := store.Load(path)
+	if err != nil || snapshot.SchemaVersion != 1 || len(snapshot.Packages) != 1 {
+		t.Fatal(snapshot, err)
+	}
+}
 
 func TestCorruptIndexIsPreservedWithVisibleDiagnostic(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "cache")
@@ -142,7 +163,7 @@ func TestWriteSmokeFixture(t *testing.T) {
 		{Name: "ripgrep", Kind: domain.KindFormula, Description: "Fast line-oriented search tool", Homepage: "https://github.com/BurntSushi/ripgrep", InstallTarget: "ripgrep", AddedAt: &old, UpdatedAt: now},
 		{Name: "font-maple", Kind: domain.KindFont, Description: "Monospace programming font", InstallTarget: "font-maple", AddedAt: &old, UpdatedAt: now},
 	}
-	if _, err := (store.Publisher{Path: filepath.Join(root, "index.db")}).Publish(context.Background(), packages, now); err != nil {
+	if err := publishTestIndex(filepath.Join(root, "index.db"), packages, now); err != nil {
 		t.Fatal(err)
 	}
 }
