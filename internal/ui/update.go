@@ -54,11 +54,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshing = true
 		m.pendingRefresh = false
 		m.progress = "starting refresh"
+		if m.dates == DatesUnavailable {
+			m.dates = DatesIndexing
+			m.setStatus("Retrying exact package date indexing", statusWarning)
+		}
 		m.refreshCh = m.deps.Refresh()
 		return m, waitRefresh(m.refreshCh)
 	case refreshEventMsg:
 		return m.updateRefreshEvent(x.Event)
 	case ActionResultMsg:
+		m.clearConfirmation()
 		m.state = StateBrowse
 		if x.Err != nil {
 			m.setStatus(x.Action+" failed: "+x.Err.Error(), statusError)
@@ -67,6 +72,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case platform.ExecResult:
+		m.clearConfirmation()
 		m.state = StateBrowse
 		if x.Err != nil {
 			m.setStatus("Install failed: "+x.Err.Error(), statusError)
@@ -97,18 +103,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.state == StateConfirm {
 		switch key {
 		case "esc", "n":
+			m.clearConfirmation()
 			m.state = StateBrowse
 			return m, nil
 		case "enter", "y":
-			p, selected := m.selectedPackage()
-			if !selected {
+			if !m.hasConfirmation {
+				m.state = StateBrowse
+				m.setStatus("Install confirmation expired", statusWarning)
 				return m, nil
 			}
+			p := m.confirmPackage
 			if m.deps.Install == nil {
+				m.clearConfirmation()
 				m.state = StateBrowse
 				m.setStatus(m.installUnavailableMessage(), statusWarning)
 				return m, nil
 			}
+			m.clearConfirmation()
 			m.state = StateRunningInstall
 			return m, m.deps.Install(p)
 		}
@@ -185,11 +196,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("Homepage unavailable", statusWarning)
 		}
 	case "i":
-		if _, selected := m.selectedPackage(); selected {
+		if p, selected := m.selectedPackage(); selected {
 			if m.deps.Install == nil {
 				m.setStatus(m.installUnavailableMessage(), statusWarning)
 				break
 			}
+			m.confirmPackage = p
+			m.hasConfirmation = true
 			m.state = StateConfirm
 		}
 	case "enter":
@@ -208,6 +221,43 @@ func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 	if e.Progress != nil {
 		m.progress = e.Progress.Detail
 	}
+	if e.SnapshotReady {
+		key := ""
+		if p, selected := m.selectedPackage(); selected {
+			key = p.Key()
+		}
+		canceled := m.cancelMissingConfirmation(e.Packages)
+		m.packages = append([]domain.Package(nil), e.Packages...)
+		m.dates = DatesReady
+		m.applyFilter(key)
+		m.stale = false
+		if !canceled {
+			m.setStatus("Loaded package index published by another Brewnicle process", statusSuccess)
+		}
+		if m.state == StateBootstrap || m.state == StateFatal {
+			m.state = StateBrowse
+		}
+		return m, waitRefresh(m.refreshCh)
+	}
+	if e.CatalogReady {
+		key := ""
+		if p, selected := m.selectedPackage(); selected {
+			key = p.Key()
+		}
+		canceled := m.cancelMissingConfirmation(e.Packages)
+		m.packages = append([]domain.Package(nil), e.Packages...)
+		m.dates = DatesIndexing
+		m.rangeValue = domain.RangeAll
+		m.applyFilter(key)
+		m.stale = false
+		if !canceled {
+			m.setStatus("Showing the current catalog while exact package dates index", statusWarning)
+		}
+		if m.state == StateBootstrap || m.state == StateFatal {
+			m.state = StateBrowse
+		}
+		return m, waitRefresh(m.refreshCh)
+	}
 	if !e.Done {
 		return m, waitRefresh(m.refreshCh)
 	}
@@ -221,6 +271,9 @@ func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 			} else {
 				m.setStatus(e.Err.Error(), statusError)
 			}
+		} else if m.dates == DatesIndexing {
+			m.dates = DatesUnavailable
+			m.setStatus("Exact package dates unavailable: "+e.Err.Error()+"; press r to retry", statusError)
 		} else {
 			m.setStatus("Refresh failed: "+e.Err.Error(), statusError)
 		}
@@ -230,9 +283,12 @@ func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 	if p, selected := m.selectedPackage(); selected {
 		key = p.Key()
 	}
+	confirmationCanceled := false
 	if e.Packages != nil {
+		confirmationCanceled = m.cancelMissingConfirmation(e.Packages)
 		m.packages = e.Packages
 	}
+	m.dates = DatesReady
 	m.applyFilter(key)
 	m.stale = false
 	m.bootstrapDiagnostic = ""
@@ -246,7 +302,9 @@ func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 		parts = append(parts, e.Summary.Warning)
 		level = statusWarning
 	}
-	m.setStatus(strings.Join(parts, "; "), level)
+	if !confirmationCanceled {
+		m.setStatus(strings.Join(parts, "; "), level)
+	}
 	if m.state == StateBootstrap || m.state == StateFatal {
 		m.state = StateBrowse
 	}
@@ -254,6 +312,13 @@ func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) changeRange(next domain.Range) {
+	if m.dates != DatesReady {
+		m.rangeValue = domain.RangeAll
+		if next != domain.RangeAll {
+			m.setStatus("Date ranges are available after exact package dates finish indexing", statusWarning)
+		}
+		return
+	}
 	keep := ""
 	if p, selected := m.selectedPackage(); selected {
 		keep = p.Key()

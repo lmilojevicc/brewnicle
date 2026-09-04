@@ -315,6 +315,46 @@ func TestHomepageInstallAvailabilityAndCompletion(t *testing.T) {
 	}
 }
 
+func TestRefreshRemovalCancelsPinnedInstallConfirmation(t *testing.T) {
+	packages := uiPkgs()[:2]
+	runs := 0
+	m := New(packages, false, false, true, Dependencies{Install: func(domain.Package) tea.Cmd {
+		runs++
+		return nil
+	}})
+	m = update(t, m, runeKey("i"))
+	if m.State() != StateConfirm || !m.hasConfirmation || m.confirmPackage.Name != "new" {
+		t.Fatal(m.State(), m.hasConfirmation, m.confirmPackage)
+	}
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Done: true, Packages: packages[1:]}})
+	if m.State() != StateBrowse || m.hasConfirmation || runs != 0 || !strings.Contains(m.status, "confirmation canceled") || !strings.Contains(m.status, "new") {
+		t.Fatal(m.State(), m.hasConfirmation, runs, m.status)
+	}
+	m = update(t, m, runeKey("y"))
+	if runs != 0 {
+		t.Fatal("removed package was installed")
+	}
+}
+
+func TestRefreshReorderingKeepsPinnedInstallTarget(t *testing.T) {
+	packages := uiPkgs()[:2]
+	var installed domain.Package
+	m := New(packages, false, false, true, Dependencies{Install: func(pkg domain.Package) tea.Cmd {
+		installed = pkg
+		return nil
+	}})
+	m = update(t, m, runeKey("i"))
+	reordered := []domain.Package{packages[1], packages[0]}
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Done: true, Packages: reordered}})
+	if m.State() != StateConfirm || !m.hasConfirmation || m.confirmPackage.Key() != packages[0].Key() {
+		t.Fatal(m.State(), m.hasConfirmation, m.confirmPackage)
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.State() != StateRunningInstall || installed.Key() != packages[0].Key() || installed.Key() == reordered[0].Key() {
+		t.Fatal(m.State(), installed)
+	}
+}
+
 func TestRefreshSummaryStaleFeedbackAndSelectionRetention(t *testing.T) {
 	m := New(uiPkgs(), false, true, true, Dependencies{})
 	m.width, m.height = 100, 20
@@ -367,5 +407,111 @@ func TestFatalRetryAndCombinedBootstrapDiagnostic(t *testing.T) {
 	_, cmd := updateWithCmd(t, m, runeKey("r"))
 	if cmd == nil {
 		t.Fatal("fatal retry not queued")
+	}
+}
+
+func provisionalPackages() []domain.Package {
+	return []domain.Package{
+		{Name: "alpha", Kind: domain.KindFormula, Description: "tool package", Homepage: "https://example.test/alpha", InstallTarget: "alpha"},
+		{Name: "beta", Kind: domain.KindFormula, Description: "tool package", Homepage: "https://example.test/beta", InstallTarget: "beta"},
+		{Name: "desktop", Kind: domain.KindCask, Description: "desktop app", InstallTarget: "desktop"},
+	}
+}
+
+func TestProvisionalCatalogBrowsesAllAndDisablesBoundedDateRanges(t *testing.T) {
+	m := New(nil, true, false, true, Dependencies{})
+	m.width, m.height = 100, 20
+	m.refreshing = true
+	m.refreshCh = make(chan RefreshEvent)
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{
+		CatalogReady: true,
+		Packages:     provisionalPackages(),
+		Progress:     &refresh.Progress{Phase: refresh.PhaseCatalogReady, Detail: "indexing exact dates"},
+	}})
+	if m.State() != StateBrowse || m.Dates() != DatesIndexing || m.Range() != domain.RangeAll || len(m.Visible()) != 3 {
+		t.Fatal(m.State(), m.Dates(), m.Range(), m.Visible())
+	}
+	m = update(t, m, runeKey("1"))
+	if m.Range() != domain.RangeAll || len(m.Visible()) != 3 || !strings.Contains(m.status, "available after") {
+		t.Fatal(m.Range(), m.Visible(), m.status)
+	}
+	view := m.View()
+	for _, want := range []string{"DATES INDEXING", "Date indexing", "alpha"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("provisional view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestWinningSnapshotRemainsBrowsableAfterCatalogFailure(t *testing.T) {
+	winner := uiPkgs()[:1]
+	m := New(nil, true, false, true, Dependencies{})
+	m.width, m.height = 100, 20
+	m.refreshing = true
+	m.refreshCh = make(chan RefreshEvent)
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{SnapshotReady: true, Packages: winner}})
+	if m.State() != StateBrowse || m.Dates() != DatesReady || len(m.Visible()) != 1 || m.Visible()[0].Name != "new" {
+		t.Fatal(m.State(), m.Dates(), m.Visible())
+	}
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Done: true, Err: errors.New("catalog down")}})
+	if m.State() != StateBrowse || m.Dates() != DatesReady || len(m.Visible()) != 1 || !strings.Contains(m.status, "Refresh failed") {
+		t.Fatal(m.State(), m.Dates(), m.Visible(), m.status)
+	}
+}
+
+func TestProvisionalFailureRetainsBrowsingAndRetry(t *testing.T) {
+	starts := 0
+	retryCh := make(chan RefreshEvent)
+	m := New(nil, true, false, true, Dependencies{Refresh: func() <-chan RefreshEvent {
+		starts++
+		return retryCh
+	}})
+	m.width, m.height = 100, 20
+	m.refreshing = true
+	m.refreshCh = make(chan RefreshEvent)
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{CatalogReady: true, Packages: provisionalPackages()}})
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Done: true, Err: errors.New("scan failed")}})
+	if m.State() != StateBrowse || m.Dates() != DatesUnavailable || len(m.Visible()) != 3 {
+		t.Fatal(m.State(), m.Dates(), m.Visible())
+	}
+	for _, want := range []string{"DATES UNAVAILABLE", "Date unavailable", "press r to retry"} {
+		if !strings.Contains(m.View(), want) {
+			t.Fatalf("failed provisional view missing %q:\n%s", want, m.View())
+		}
+	}
+	m, startCmd := updateWithCmd(t, m, runeKey("r"))
+	if startCmd == nil {
+		t.Fatal("retry was not queued")
+	}
+	m, waitCmd := updateWithCmd(t, m, startCmd())
+	if starts != 1 || waitCmd == nil || !m.Refreshing() || m.Dates() != DatesIndexing || len(m.Visible()) != 3 {
+		t.Fatal(starts, m.Refreshing(), m.Dates(), m.Visible())
+	}
+}
+
+func TestExactCompletionPreservesProvisionalSearchTypeAndSelection(t *testing.T) {
+	m := New(nil, true, false, true, Dependencies{})
+	m.width, m.height = 100, 20
+	m.refreshing = true
+	m.refreshCh = make(chan RefreshEvent)
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{CatalogReady: true, Packages: provisionalPackages()}})
+	m = update(t, m, runeKey("f"))
+	m = update(t, m, runeKey("j"))
+	m = update(t, m, runeKey("/"))
+	m = update(t, m, runeKey("tool"))
+	selected, ok := m.selectedPackage()
+	if !ok || selected.Name != "beta" {
+		t.Fatal(selected, ok)
+	}
+	now := time.Now().UTC()
+	exact := provisionalPackages()
+	for i := range exact {
+		at := now.Add(-time.Duration(i+1) * time.Hour)
+		exact[i].AddedAt = &at
+	}
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Done: true, Packages: exact}})
+	got, ok := m.selectedPackage()
+	if !ok || got.Key() != selected.Key() || m.State() != StateSearch || m.KindFilter() != domain.KindFilterFormula || m.query != "tool" || m.Dates() != DatesReady {
+		t.Fatal(got, ok, m.State(), m.KindFilter(), m.query, m.Dates())
 	}
 }

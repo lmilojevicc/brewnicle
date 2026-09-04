@@ -113,10 +113,11 @@ func writeLegacyIndex(t *testing.T, path string) {
 }
 
 type blockingHist struct {
-	started  chan struct{}
-	release  chan struct{}
-	prepared history.Prepared
-	err      error
+	started    chan struct{}
+	release    chan struct{}
+	prepared   history.Prepared
+	err        error
+	reconciled *bool
 }
 
 func (h *blockingHist) PrepareAll(context.Context, history.State, history.ProgressFunc) (history.Prepared, error) {
@@ -124,11 +125,161 @@ func (h *blockingHist) PrepareAll(context.Context, history.State, history.Progre
 	<-h.release
 	return h.prepared, h.err
 }
-func (*blockingHist) ReconcilePublished(context.Context, history.Prepared) error { return nil }
+func (h *blockingHist) ReconcilePublished(context.Context, history.Prepared) error {
+	if h.reconciled != nil {
+		*h.reconciled = true
+	}
+	return nil
+}
 
 type migrationHist struct {
 	state     history.State
 	fullScans int
+}
+
+func TestBootstrapEmitsCatalogBeforeBlockedHistoryWithoutPublishingIt(t *testing.T) {
+	reconciled := false
+	hist := &blockingHist{started: make(chan struct{}), release: make(chan struct{}), prepared: completePrepared(), reconciled: &reconciled}
+	var published store.PublishInput
+	idx := &fakeIndex{loadErr: store.ErrNotFound, published: &published}
+	s := Service{Catalog: fakeCat{}, History: hist, Index: idx, Now: func() time.Time { return time.Unix(2, 0) }, CatalogFirst: true}
+	events := make(chan Progress, 16)
+	finished := make(chan error, 1)
+	go func() {
+		_, _, err := s.Run(context.Background(), func(event Progress) { events <- event })
+		finished <- err
+	}()
+	select {
+	case <-hist.started:
+	case <-time.After(time.Second):
+		t.Fatal("history did not start")
+	}
+	var phases []Phase
+	var catalog []domain.Package
+	drain := true
+	for drain {
+		select {
+		case event := <-events:
+			phases = append(phases, event.Phase)
+			if event.Phase == PhaseCatalogReady {
+				catalog = event.Packages
+			}
+		default:
+			drain = false
+		}
+	}
+	readyAt, historyAt := -1, -1
+	for i, phase := range phases {
+		if phase == PhaseCatalogReady {
+			readyAt = i
+		}
+		if phase == PhaseHistory && historyAt == -1 {
+			historyAt = i
+		}
+	}
+	if readyAt == -1 || historyAt == -1 || readyAt >= historyAt || len(catalog) != 1 || catalog[0].Name != "new" {
+		t.Fatalf("events=%v catalog=%v", phases, catalog)
+	}
+	if published.Packages != nil || published.History.CompleteCurrent() || reconciled {
+		t.Fatal("provisional catalog was published or reconciled")
+	}
+	close(hist.release)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidCachedGenerationDoesNotEmitProvisionalCatalog(t *testing.T) {
+	prepared := completePrepared()
+	idx := &fakeIndex{snapshot: store.Snapshot{
+		SchemaVersion:        store.CurrentSchemaVersion,
+		HistoryLayoutVersion: store.HistoryLayoutVersion,
+		History:              prepared.State,
+		Packages:             []domain.Package{{Name: "cached", Kind: domain.KindFormula}},
+	}}
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: prepared}, Index: idx, CatalogFirst: true}
+	var phases []Phase
+	if _, _, err := s.Run(context.Background(), func(event Progress) { phases = append(phases, event.Phase) }); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range phases {
+		if phase == PhaseCatalogReady {
+			t.Fatalf("valid cache was replaced provisionally: %v", phases)
+		}
+	}
+}
+
+func TestBootstrapExposesWinningSnapshotBeforeCatalogFailureOnlyOnce(t *testing.T) {
+	prepared := completePrepared()
+	called := false
+	idx := &fakeIndex{snapshot: store.Snapshot{
+		SchemaVersion:        store.CurrentSchemaVersion,
+		HistoryLayoutVersion: store.HistoryLayoutVersion,
+		History:              prepared.State,
+		Packages:             []domain.Package{{Name: "winner", Kind: domain.KindFormula}},
+	}}
+	s := Service{Catalog: fakeCat{err: errors.New("catalog down")}, History: fakeHist{called: &called}, Index: idx, CatalogFirst: true}
+	var events []Progress
+	if _, _, err := s.Run(context.Background(), func(event Progress) { events = append(events, event) }); err == nil || !strings.Contains(err.Error(), "catalog down") {
+		t.Fatal(err)
+	}
+	if called || len(events) < 2 || events[0].Phase != PhaseSnapshotReady || events[1].Phase != PhaseCatalog || len(events[0].Packages) != 1 || events[0].Packages[0].Name != "winner" {
+		t.Fatalf("called=%v events=%v", called, events)
+	}
+	events = nil
+	if _, _, err := s.Run(context.Background(), func(event Progress) { events = append(events, event) }); err == nil || !strings.Contains(err.Error(), "catalog down") {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Phase == PhaseSnapshotReady || event.Phase == PhaseCatalogReady {
+			t.Fatalf("bootstrap event repeated after exact snapshot adoption: %v", events)
+		}
+	}
+}
+
+func TestCatalogFirstIsOneShotAfterSuccessfulPublish(t *testing.T) {
+	idx := &fakeIndex{loadErr: store.ErrNotFound}
+	s := Service{Catalog: fakeCat{}, History: fakeHist{prepared: completePrepared()}, Index: idx, CatalogFirst: true}
+	for run := 0; run < 2; run++ {
+		var phases []Phase
+		if _, _, err := s.Run(context.Background(), func(event Progress) { phases = append(phases, event.Phase) }); err != nil {
+			t.Fatal(err)
+		}
+		ready := false
+		for _, phase := range phases {
+			ready = ready || phase == PhaseCatalogReady
+		}
+		if ready != (run == 0) {
+			t.Fatalf("run %d phases=%v", run+1, phases)
+		}
+	}
+}
+
+func TestCatalogFirstRetryRetainsBootstrapUntilExactPublish(t *testing.T) {
+	hist := &fakeHist{err: errors.New("history interrupted")}
+	idx := &fakeIndex{loadErr: store.ErrNotFound}
+	s := Service{Catalog: fakeCat{}, History: hist, Index: idx, CatalogFirst: true}
+	for run := 0; run < 3; run++ {
+		var phases []Phase
+		_, _, err := s.Run(context.Background(), func(event Progress) { phases = append(phases, event.Phase) })
+		if run == 0 {
+			if err == nil || !strings.Contains(err.Error(), "history interrupted") {
+				t.Fatal(err)
+			}
+			hist.err = nil
+			hist.prepared = completePrepared()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		ready := false
+		for _, phase := range phases {
+			ready = ready || phase == PhaseCatalogReady
+		}
+		wantReady := run < 2
+		if ready != wantReady {
+			t.Fatalf("run %d phases=%v", run+1, phases)
+		}
+	}
 }
 
 func (h *migrationHist) PrepareAll(_ context.Context, previous history.State, _ history.ProgressFunc) (history.Prepared, error) {
@@ -155,6 +306,57 @@ func TestSecondServiceReloadsFirstPublishedGenerationUnderSharedLock(t *testing.
 	}
 	if seen.Core.TipOID != prepared.State.Core.TipOID || seen.Cask.TipOID != prepared.State.Cask.TipOID {
 		t.Fatal("second service did not observe first publication")
+	}
+}
+
+func TestNonBootstrapWaiterAdoptsWinningGenerationBeforeCatalogFailureOnlyOnce(t *testing.T) {
+	prepared := completePrepared()
+	old := store.Snapshot{
+		SchemaVersion:        store.CurrentSchemaVersion,
+		HistoryLayoutVersion: store.HistoryLayoutVersion,
+		History:              prepared.State,
+		RefreshedAt:          time.Unix(1, 0),
+		Packages:             []domain.Package{{Name: "old", Kind: domain.KindFormula}},
+	}
+	winner := old
+	winner.RefreshedAt = time.Unix(2, 0)
+	winner.Packages = []domain.Package{{Name: "winner", Kind: domain.KindFormula}}
+	idx := &fakeIndex{snapshot: old}
+	locker := fakeLocker{onAcquire: func() { idx.snapshot = winner }}
+	s := Service{
+		Catalog:         fakeCat{err: errors.New("catalog down")},
+		History:         fakeHist{prepared: prepared},
+		Index:           idx,
+		Locker:          locker,
+		VisibleSnapshot: &old,
+	}
+
+	var events []Progress
+	if _, _, err := s.Run(context.Background(), func(event Progress) { events = append(events, event) }); err == nil || !strings.Contains(err.Error(), "catalog down") {
+		t.Fatal(err)
+	}
+	if len(events) < 2 || events[0].Phase != PhaseSnapshotReady || events[1].Phase != PhaseCatalog || len(events[0].Packages) != 1 || events[0].Packages[0].Name != "winner" {
+		t.Fatalf("events=%v", events)
+	}
+
+	events = nil
+	if _, _, err := s.Run(context.Background(), func(event Progress) { events = append(events, event) }); err == nil || !strings.Contains(err.Error(), "catalog down") {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Phase == PhaseSnapshotReady || event.Phase == PhaseCatalogReady {
+			t.Fatalf("winning generation was emitted twice: %v", events)
+		}
+	}
+}
+
+func TestSnapshotGenerationDistinguishesSameSecondPackageChanges(t *testing.T) {
+	prepared := completePrepared()
+	first := store.Snapshot{SchemaVersion: store.CurrentSchemaVersion, HistoryLayoutVersion: store.HistoryLayoutVersion, History: prepared.State, RefreshedAt: time.Unix(1, 0), Packages: []domain.Package{{Name: "first", Kind: domain.KindFormula}}}
+	second := first
+	second.Packages = []domain.Package{{Name: "second", Kind: domain.KindFormula}}
+	if snapshotGeneration(first) == snapshotGeneration(second) {
+		t.Fatal("distinct same-second publications shared an identity")
 	}
 }
 

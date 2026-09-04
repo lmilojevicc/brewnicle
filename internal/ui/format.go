@@ -52,7 +52,13 @@ func wrap(s string, width int) []string {
 	}
 	return lines
 }
-func age(t *time.Time, now time.Time) string {
+func age(t *time.Time, now time.Time, availability DateAvailability) string {
+	switch availability {
+	case DatesIndexing:
+		return "Date indexing…"
+	case DatesUnavailable:
+		return "Date unavailable"
+	}
 	if t == nil {
 		return "Date unknown"
 	}
@@ -63,7 +69,7 @@ func age(t *time.Time, now time.Time) string {
 	days := int(d.Hours() / 24)
 	return fmt.Sprintf("%s · %d days ago", t.UTC().Format("2006-01-02"), days)
 }
-func detailLines(p domain.Package, width int, now time.Time, installAvailable bool, s styles) []string {
+func detailLines(p domain.Package, width int, now time.Time, installAvailable bool, dates DateAvailability, s styles) []string {
 	home := p.Homepage
 	if home == "" {
 		home = "Unavailable"
@@ -80,7 +86,7 @@ func detailLines(p domain.Package, width int, now time.Time, installAvailable bo
 		nameWidth := width - lipgloss.Width(suffix)
 		heading = s.title.Render(truncate(p.Name, nameWidth)) + "  [" + s.kind(p.Kind).Render(kind) + "]"
 	}
-	lines := []string{heading, s.muted.Render(truncate(age(p.AddedAt, now), width)), ""}
+	lines := []string{heading, s.muted.Render(truncate(age(p.AddedAt, now, dates), width)), ""}
 	lines = append(lines, wrap(p.Description, width)...)
 	lines = append(lines, "")
 	lines = append(lines, s.link.Render(truncate("Homepage: "+home, width)))

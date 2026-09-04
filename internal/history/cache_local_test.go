@@ -65,8 +65,8 @@ func TestCacheInitialCloneAndRefreshWithLocalRemote(t *testing.T) {
 	if e != nil || events["one"].IsZero() || update.Mode != ScanFull {
 		t.Fatal(events, update.Mode, e)
 	}
-	// Mutating cached origin must not redirect subsequent fetches. The cache
-	// update always fetches from the explicit authoritative remote argument.
+	// Mutating cached origin makes the repository untrusted. A healthy cache is
+	// rejected and preserved rather than deleted without corruption evidence.
 	maliciousSrc := filepath.Join(base, "malicious-src")
 	maliciousRemote := filepath.Join(base, "malicious.git")
 	if err = os.MkdirAll(filepath.Join(maliciousSrc, "Formula"), 0755); err != nil {
@@ -81,7 +81,15 @@ func TestCacheInitialCloneAndRefreshWithLocalRemote(t *testing.T) {
 	run(maliciousSrc, "add", ".")
 	run(maliciousSrc, "commit", "-qm", "evil")
 	run(base, "clone", "-q", "--bare", maliciousSrc, maliciousRemote)
-	run(base, "--git-dir", filepath.Join(cache.Root, "core.git"), "remote", "set-url", "origin", maliciousRemote)
+	repoPath := filepath.Join(cache.Root, "core.git")
+	run(base, "--git-dir", repoPath, "remote", "set-url", "origin", maliciousRemote)
+	if _, unsafeErr := cache.prepareRepo(context.Background(), RepoCore, update.State, nil, false); unsafeErr == nil || !strings.Contains(unsafeErr.Error(), "unexpected remote") {
+		t.Fatalf("unsafe healthy repository was not preserved: %v", unsafeErr)
+	}
+	if _, statErr := os.Stat(repoPath); statErr != nil {
+		t.Fatalf("healthy repository was removed: %v", statErr)
+	}
+	run(base, "--git-dir", repoPath, "remote", "set-url", "origin", remote)
 
 	if err = os.WriteFile(filepath.Join(src, "Formula", "two.rb"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
@@ -91,15 +99,15 @@ func TestCacheInitialCloneAndRefreshWithLocalRemote(t *testing.T) {
 	run(src, "push", "-q", remote, "main")
 	update, e = cache.prepareRepo(context.Background(), RepoCore, update.State, nil, false)
 	events = update.State.Events
-	if e != nil || events["two"].IsZero() || update.Mode != ScanIncremental {
-		t.Fatal(events, update.Mode, e)
+	if e != nil || events["two"].IsZero() || update.Mode != ScanIncremental || update.RecoveredRepository {
+		t.Fatal(events, update.Mode, update.RecoveredRepository, e)
 	}
 	unchanged, unchangedErr := cache.prepareRepo(context.Background(), RepoCore, update.State, nil, false)
 	if unchangedErr != nil || unchanged.Mode != ScanUnchanged || len(unchanged.State.Events) != len(events) {
 		t.Fatal(unchanged.Mode, unchangedErr)
 	}
-	if len(recorder.revisions) != 2 || recorder.revisions[1].FromOID != firstTip || recorder.revisions[1].ToOID != update.State.TipOID {
-		t.Fatalf("expected exact published..fetched range, got %+v", recorder.revisions)
+	if len(recorder.revisions) != 2 || recorder.revisions[1].FromOID != firstTip || recorder.revisions[1].ToOID != update.State.TipOID || firstTip == "" {
+		t.Fatalf("expected an incremental scan after cache repair, got %+v", recorder.revisions)
 	}
 	// A non-ancestor official tip replaces, rather than unions, the old aggregate.
 	run(src, "checkout", "-q", "--orphan", "rewritten")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"time"
 
@@ -54,7 +55,9 @@ func (s Scanner) Scan(ctx context.Context, gitDir string, rev Revision, repo Rep
 	if git == "" {
 		git = "git"
 	}
-	cmd := exec.CommandContext(ctx, git, args...)
+	runArgs := append([]string{"--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always"}, args...)
+	cmd := exec.CommandContext(ctx, git, runArgs...)
+	cmd.Env = hardenedGitEnvironment(os.Environ())
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, nonRecoverableError{fmt.Errorf("git log stdout: %w", err)}
@@ -62,7 +65,7 @@ func (s Scanner) Scan(ctx context.Context, gitDir string, rev Revision, repo Rep
 	var stderr bytes.Buffer
 	cmd.Stderr = &limitedWriter{w: &stderr, n: 8192}
 	if err = cmd.Start(); err != nil {
-		return nil, nonRecoverableError{newCommandError(args, nil, err)}
+		return nil, nonRecoverableError{newCommandError(runArgs, nil, err)}
 	}
 	events, parseErr := ParseLog(stdout, repo)
 	if parseErr != nil {
@@ -76,7 +79,7 @@ func (s Scanner) Scan(ctx context.Context, gitDir string, rev Revision, repo Rep
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		return nil, newCommandError(args, stderr.Bytes(), waitErr)
+		return nil, newCommandError(runArgs, stderr.Bytes(), waitErr)
 	}
 	if rev.FromOID == "" && len(events) == 0 {
 		return nil, fmt.Errorf("full history scan contained no valid package events")

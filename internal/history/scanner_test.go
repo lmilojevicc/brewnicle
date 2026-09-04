@@ -2,6 +2,7 @@ package history
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,11 +37,42 @@ func TestLogArgsFullAndRange(t *testing.T) {
 		t.Fatal(joined)
 	}
 }
-func TestScannerLaunchFailureNamesLogAndIsNotRecoverable(t *testing.T) {
+func TestScannerLaunchFailureNamesLogAndIsRecognized(t *testing.T) {
 	oid := strings.Repeat("a", 40)
 	_, err := (Scanner{Git: filepath.Join(t.TempDir(), "missing-git")}).Scan(context.Background(), t.TempDir(), Revision{ToOID: oid}, RepoCore)
-	if err == nil || !strings.Contains(err.Error(), "git log") || (&Cache{}).recoverable(err) {
+	if err == nil || !strings.Contains(err.Error(), "git log") || !commandLaunchFailed(err) {
 		t.Fatal(err)
+	}
+}
+
+func TestScannerUsesHardenedGitEnvironment(t *testing.T) {
+	capture := filepath.Join(t.TempDir(), "environment")
+	script := filepath.Join(t.TempDir(), "capture-git")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nenv > \"$BREWNICLE_ENV_CAPTURE\"\nexit 2\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BREWNICLE_ENV_CAPTURE", capture)
+	t.Setenv("GIT_OBJECT_DIRECTORY", "/tmp/attacker-objects")
+	t.Setenv("GIT_SSL_NO_VERIFY", "true")
+	t.Setenv("HTTPS_PROXY", "http://attacker.test")
+	_, err := (Scanner{Git: script}).Scan(context.Background(), t.TempDir(), Revision{ToOID: strings.Repeat("a", 40)}, RepoCore)
+	if err == nil {
+		t.Fatal("capture command unexpectedly succeeded")
+	}
+	raw, readErr := os.ReadFile(capture)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	env := strings.ToUpper(string(raw))
+	for _, forbidden := range []string{"GIT_OBJECT_DIRECTORY=", "GIT_SSL_NO_VERIFY=", "HTTPS_PROXY="} {
+		if strings.Contains(env, forbidden) {
+			t.Fatalf("streaming scanner inherited %s: %s", forbidden, raw)
+		}
+	}
+	for _, required := range []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_NO_REPLACE_OBJECTS=1", "GIT_TERMINAL_PROMPT=0"} {
+		if !strings.Contains(env, required) {
+			t.Fatalf("streaming scanner omitted %s: %s", required, raw)
+		}
 	}
 }
 

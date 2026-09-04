@@ -22,6 +22,7 @@ func TestGoldenViews(t *testing.T) {
 	base := func(w, h int) Model {
 		m := New(packages, false, false, true, available)
 		m.now = func() time.Time { return now }
+		m.applyFilter("")
 		return update(t, m, tea.WindowSizeMsg{Width: w, Height: h})
 	}
 	cases := map[string]Model{
@@ -49,6 +50,7 @@ func TestGoldenViews(t *testing.T) {
 	cases["search"] = search
 	narrowSearch := New(packages, false, true, true, available)
 	narrowSearch.now = func() time.Time { return now }
+	narrowSearch.applyFilter("")
 	narrowSearch = update(t, narrowSearch, tea.WindowSizeMsg{Width: 50, Height: 12})
 	narrowSearch.refreshing = true
 	narrowSearch.progress = "fetching a long repository description"
@@ -58,10 +60,11 @@ func TestGoldenViews(t *testing.T) {
 	bootstrap = update(t, bootstrap, tea.WindowSizeMsg{Width: 100, Height: 16})
 	cases["bootstrap"] = bootstrap
 	confirm := base(100, 16)
-	confirm.state = StateConfirm
+	confirm = update(t, confirm, runeKey("i"))
 	cases["confirm"] = confirm
 	stale := New(packages, false, true, true, available)
 	stale.now = func() time.Time { return now }
+	stale.applyFilter("")
 	stale = update(t, stale, tea.WindowSizeMsg{Width: 100, Height: 16})
 	cases["stale"] = stale
 	empty := New([]domain.Package{{Name: "unknown", Kind: domain.KindFormula}}, false, false, true, available)

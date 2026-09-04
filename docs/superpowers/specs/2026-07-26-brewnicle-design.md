@@ -83,7 +83,7 @@ Time filters are evaluated relative to the current time in UTC:
 
 Unknown dates are excluded from every bounded filter. Results are sorted by `added_at` descending, then package name ascending. Unknown dates sort after all dated records in the `all` view.
 
-The initial range on first bootstrap and every later application start is `30d`. Range changes are session state only and are not persisted between runs.
+The initial range is `30d` when exact dates are available. During a catalog-first bootstrap, the range is forced to `all` and bounded ranges are disabled until exact date indexing completes. Range changes are session state only and are not persisted between runs.
 
 A separate package-type filter has `all`, `formula`, `cask`, and `font` states and defaults to `all` on every start. `f` cycles forward through those states and `F` cycles backward. Type changes are session state only and are not persisted.
 
@@ -309,16 +309,15 @@ The application loads all package rows into memory after opening the database. T
 
 ### 8.2 First-run bootstrap
 
-1. Show a foreground bootstrap screen with phase, current repository, and progress where measurable.
-2. Fetch both current API catalogs.
-3. Create or update the app-owned bare partial git caches.
-4. Scan history event maps.
+1. Show a foreground bootstrap screen while fetching the current API catalogs.
+2. After both catalogs validate, enter provisional browsing with the current catalog in memory, force the `all` range, and mark exact dates and bounded ranges as indexing. Search, type filters, homepage opening, and installation remain usable.
+3. Create or update the app-owned bare partial git caches in the background. Validate each completed full clone and atomically rename it to a durable `.bootstrap` path before scanning so a later run can reuse the download.
+4. Scan exact history event maps from the durable pending repositories and promote each repository to its canonical cache path only after its scan and candidate state validate.
 5. Exclude disabled entries, then join every remaining valid current catalog record to its earliest known date.
 6. Build and validate a temporary SQLite database in the same directory as the active database.
-7. Close it and atomically rename it into the active location.
-8. Load the new rows and enter the main view.
+7. Close it and atomically rename it into the active location, then replace the provisional rows while preserving search, type, and selection where possible.
 
-No partially built index is made visible. If first-run bootstrap fails, show the cause with retry and quit actions.
+Provisional rows are never written to SQLite and a pending clone never implies complete history or published refs. If catalog fetch fails before provisional browsing is possible, show the cause with retry and quit actions. If later history work fails, retain catalog browsing, mark dates unavailable, and offer `r` retry.
 
 ### 8.3 Refresh
 
@@ -338,7 +337,8 @@ Brewnicle uses the platform user-cache location, with an application subdirector
 
 - the active SQLite index;
 - temporary database files during refresh;
-- bare partial git caches for core and cask history.
+- bare partial git caches for core and cask history;
+- durable `.bootstrap` clones that completed download but have not yet completed and published an exact scan.
 
 The first run is materially slower than subsequent starts and requires network access, `git`, and enough disk for the repositories' commit/tree histories. Partial clone avoids package file blobs where the remote and local git version support filtering, but Homebrew's long histories can still consume significant time, bandwidth, and disk. Brewnicle must communicate this before bootstrap and show progress; it must not claim that initialization is instant or assign an exact size/time that varies by repository and network.
 
@@ -348,8 +348,8 @@ This cost is the deliberate trade-off for accurate, locally queryable all-time f
 
 The Bubble Tea model has explicit states:
 
-- `bootstrapping`: no valid index; foreground catalog/history/index progress;
-- `browsing`: main split or narrow view;
+- `bootstrapping`: no valid index and the current catalogs are not yet available;
+- `browsing`: main split or narrow view, including provisional catalog-first browsing while dates index;
 - `searching`: search input owns text keys;
 - `help`: help overlay over browsing;
 - `confirmingInstall`: modal owns confirmation/cancel keys;
@@ -359,7 +359,7 @@ The Bubble Tea model has explicit states:
 
 Refresh is orthogonal background state layered on browsing rather than a separate blocking screen when a valid index exists. Only one refresh may run at a time.
 
-The browsing state starts with `30d` active on every run. Empty results show the active constraints and hints to clear search or choose `all`. A missing or invalid homepage has already been normalized to empty and disables `o` for that record. Errors are concise in the main view, while bootstrap and refresh summaries retain enough detail to identify whether HTTP, git, database, opener, or Homebrew failed.
+The browsing state starts with `30d` when exact dates are available and with forced `all` during provisional date indexing. Empty results show the active constraints and hints to clear search or choose `all`. A missing or invalid homepage has already been normalized to empty and disables `o` for that record. Errors are concise in the main view, while bootstrap and refresh summaries retain enough detail to identify whether HTTP, git, database, opener, or Homebrew failed.
 
 ## 11. Failure Handling
 
@@ -368,7 +368,7 @@ The browsing state starts with `30d` active on every run. Empty results show the
 | Network unavailable with no index | Stay on first-run error screen; offer retry and quit |
 | Network unavailable with valid index | Keep browsing; show stale/refresh warning |
 | API response invalid or oversized | Abort refresh; do not publish partial catalog |
-| `git` unavailable during first run | Explain that git is required for history; offer retry and quit |
+| `git` unavailable after first-run catalogs load | Keep provisional catalog browsing; mark exact dates unavailable and offer retry |
 | `git` unavailable with valid index | Preserve index; report refresh failure |
 | One catalog entry malformed | Skip it, count it, and show the skipped count in refresh summary |
 | Git command/output malformed | Abort refresh because dates could be silently incorrect |

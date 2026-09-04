@@ -13,6 +13,14 @@ type State int
 
 type statusLevel int
 
+type DateAvailability int
+
+const (
+	DatesReady DateAvailability = iota
+	DatesIndexing
+	DatesUnavailable
+)
+
 const (
 	statusNone statusLevel = iota
 	statusSuccess
@@ -57,8 +65,11 @@ type Model struct {
 	progress            string
 	status              string
 	statusLevel         statusLevel
+	dates               DateAvailability
 	stale               bool
 	bootstrapDiagnostic string
+	confirmPackage      domain.Package
+	hasConfirmation     bool
 	now                 func() time.Time
 	noColor             bool
 }
@@ -83,8 +94,10 @@ func New(packages []domain.Package, bootstrap, stale, noColor bool, deps Depende
 	in.CharLimit = 120
 	in.Width = 30
 	state := StateBrowse
+	dates := DatesReady
 	if bootstrap {
 		state = StateBootstrap
+		dates = DatesIndexing
 	}
 	m := Model{
 		packages:            packages,
@@ -94,6 +107,7 @@ func New(packages []domain.Package, bootstrap, stale, noColor bool, deps Depende
 		input:               in,
 		deps:                deps,
 		pendingRefresh:      bootstrap || stale,
+		dates:               dates,
 		stale:               stale,
 		bootstrapDiagnostic: deps.BootstrapDiagnostic,
 		now:                 time.Now,
@@ -114,7 +128,11 @@ func (m *Model) applyFilter(keep string) {
 	if old == "" && m.selected >= 0 && m.selected < len(m.visible) {
 		old = m.visible[m.selected].Key()
 	}
-	m.visible = domain.Filter(m.packages, m.rangeValue, m.kindFilter, m.query, m.now())
+	rangeValue := m.rangeValue
+	if m.dates != DatesReady {
+		rangeValue = domain.RangeAll
+	}
+	m.visible = domain.Filter(m.packages, rangeValue, m.kindFilter, m.query, m.now())
 	m.selected = 0
 	for i, p := range m.visible {
 		if p.Key() == old {
@@ -139,10 +157,33 @@ func (m Model) selectedPackage() (domain.Package, bool) {
 	return m.visible[m.selected], true
 }
 
+func (m *Model) clearConfirmation() {
+	m.confirmPackage = domain.Package{}
+	m.hasConfirmation = false
+}
+
+func (m *Model) cancelMissingConfirmation(packages []domain.Package) bool {
+	if m.state != StateConfirm || !m.hasConfirmation {
+		return false
+	}
+	key := m.confirmPackage.Key()
+	for _, pkg := range packages {
+		if pkg.Key() == key {
+			return false
+		}
+	}
+	name := m.confirmPackage.Name
+	m.clearConfirmation()
+	m.state = StateBrowse
+	m.setStatus("Install confirmation canceled: "+name+" is no longer in the catalog", statusWarning)
+	return true
+}
+
 func (m Model) Range() domain.Range           { return m.rangeValue }
 func (m Model) KindFilter() domain.KindFilter { return m.kindFilter }
 func (m Model) Refreshing() bool              { return m.refreshing }
 func (m Model) PendingRefresh() bool          { return m.pendingRefresh }
 func (m Model) Stale() bool                   { return m.stale }
+func (m Model) Dates() DateAvailability       { return m.dates }
 func (m Model) State() State                  { return m.state }
 func (m Model) Visible() []domain.Package     { return append([]domain.Package(nil), m.visible...) }

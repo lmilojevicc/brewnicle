@@ -79,6 +79,12 @@ func (m Model) headerLines() []string {
 	if m.stale {
 		rightParts = append(rightParts, s.warning.Render("STALE"))
 	}
+	switch m.dates {
+	case DatesIndexing:
+		rightParts = append(rightParts, s.warning.Render("DATES INDEXING"))
+	case DatesUnavailable:
+		rightParts = append(rightParts, s.danger.Render("DATES UNAVAILABLE"))
+	}
 	if m.refreshing {
 		if compact || m.progress == "" {
 			rightParts = append(rightParts, s.accent.Render("refreshing"))
@@ -165,7 +171,7 @@ func (m Model) wideView() string {
 	left := fitLines(m.rows(leftWidth, bodyHeight), leftWidth, bodyHeight)
 	rightLines := []string{"Select a package"}
 	if p, selected := m.selectedPackage(); selected {
-		rightLines = detailLines(p, rightWidth, m.now(), m.deps.Install != nil, s)
+		rightLines = detailLines(p, rightWidth, m.now(), m.deps.Install != nil, m.dates, s)
 	}
 	right := fitLines(rightLines, rightWidth, bodyHeight)
 	separator := strings.TrimSuffix(strings.Repeat(" │ \n", bodyHeight), "\n")
@@ -184,7 +190,7 @@ func (m Model) narrowView() string {
 	var body string
 	if m.state == StateNarrowDetail {
 		if p, selected := m.selectedPackage(); selected {
-			body = fitLines(detailLines(p, m.width, m.now(), m.deps.Install != nil, s), m.width, bodyHeight)
+			body = fitLines(detailLines(p, m.width, m.now(), m.deps.Install != nil, m.dates, s), m.width, bodyHeight)
 		} else {
 			body = fitLines(m.rows(m.width, bodyHeight), m.width, bodyHeight)
 		}
@@ -275,8 +281,8 @@ func (m Model) helpView() string {
 func (m Model) confirmView() string {
 	s := makeStyles(m.noColor)
 	command := ""
-	if p, selected := m.selectedPackage(); selected {
-		command = platformDisplay(p)
+	if m.hasConfirmation {
+		command = platformDisplay(m.confirmPackage)
 	}
 	return fitLines([]string{s.warning.Render("Confirm installation"), "", s.installPrompt.Render(command), "", s.muted.Render("Enter/y install  Esc/n cancel")}, m.width, m.height)
 }

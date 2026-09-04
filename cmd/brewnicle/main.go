@@ -43,6 +43,7 @@ type applicationHooks struct {
 	now             func() time.Time
 	preserveInvalid func(string, time.Time) (string, error)
 	lookPath        platform.LookupFunc
+	locker          refresh.Locker
 }
 
 func defaultApplicationHooks() applicationHooks {
@@ -72,32 +73,39 @@ func newApplicationWithHooks(ctx context.Context, cacheRoot string, hooks applic
 	if err != nil {
 		return ui.Model{}, err
 	}
-	snapshot, loadErr := store.Load(paths.Index)
-	bootstrap := loadErr != nil
-	stale := false
-	bootstrapDiagnostic := ""
-	if loadErr == nil {
-		stale = refresh.NeedsRefresh(snapshot, hooks.now())
-	} else if _, statErr := os.Stat(paths.Index); statErr == nil {
-		preserved, preserveErr := hooks.preserveInvalid(paths.Index, hooks.now())
-		if preserveErr != nil {
-			return ui.Model{}, fmt.Errorf("existing index is invalid (%v); preserving it failed: %w", loadErr, preserveErr)
-		}
-		bootstrapDiagnostic = fmt.Sprintf("Existing index was invalid (%v) and preserved at %s", loadErr, preserved)
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return ui.Model{}, statErr
+	locker := hooks.locker
+	if locker == nil {
+		locker = refresh.FileLock{Path: paths.Lock}
 	}
+	snapshot, bootstrap, bootstrapDiagnostic, err := loadStartupIndex(ctx, paths.Index, locker, hooks.now(), hooks.preserveInvalid)
+	if err != nil {
+		return ui.Model{}, err
+	}
+	stale := !bootstrap && refresh.NeedsRefresh(snapshot, hooks.now())
 	client := catalog.NewClient(&http.Client{Timeout: 2 * time.Minute})
 	historyCache := &history.Cache{Boundary: paths.Root, Root: paths.Git, Git: history.ExecGit{}, Scanner: history.Scanner{}}
 	publisher := store.Publisher{Path: paths.Index}
-	service := refresh.Service{Catalog: client, History: historyCache, Index: publisher, Locker: refresh.FileLock{Path: paths.Lock}, Now: hooks.now}
+	var visibleSnapshot *store.Snapshot
+	if !bootstrap {
+		visibleSnapshot = &snapshot
+	}
+	service := refresh.Service{Catalog: client, History: historyCache, Index: publisher, Locker: locker, Now: hooks.now, CatalogFirst: bootstrap, VisibleSnapshot: visibleSnapshot}
 	starter := func() <-chan ui.RefreshEvent {
 		ch := make(chan ui.RefreshEvent, 16)
 		go func() {
 			defer close(ch)
 			emit := func(p refresh.Progress) {
+				event := ui.RefreshEvent{Progress: &p}
+				switch p.Phase {
+				case refresh.PhaseCatalogReady:
+					event.CatalogReady = true
+					event.Packages = p.Packages
+				case refresh.PhaseSnapshotReady:
+					event.SnapshotReady = true
+					event.Packages = p.Packages
+				}
 				select {
-				case ch <- ui.RefreshEvent{Progress: &p}:
+				case ch <- event:
 				case <-ctx.Done():
 				}
 			}
@@ -137,4 +145,52 @@ func newApplicationWithHooks(ctx context.Context, cacheRoot string, hooks applic
 		deps.InstallUnavailable = "Homebrew is unavailable"
 	}
 	return ui.New(snapshot.Packages, bootstrap, stale, os.Getenv("NO_COLOR") != "", deps), nil
+}
+
+func loadStartupIndex(ctx context.Context, path string, locker refresh.Locker, now time.Time, preserve func(string, time.Time) (string, error)) (snapshot store.Snapshot, bootstrap bool, diagnostic string, err error) {
+	snapshot, loadErr := store.Load(path)
+	if loadErr == nil {
+		return snapshot, false, "", nil
+	}
+	initialInfo, statErr := os.Stat(path)
+	if errors.Is(statErr, os.ErrNotExist) {
+		return store.Snapshot{}, true, "", nil
+	}
+	if statErr != nil {
+		return store.Snapshot{}, false, "", statErr
+	}
+	release, err := locker.Acquire(ctx, nil)
+	if err != nil {
+		return store.Snapshot{}, false, "", err
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			err = errors.Join(err, releaseErr)
+		}
+	}()
+
+	// Another process may have atomically published while this process waited.
+	// Reload under the publication lock before touching the active path.
+	lockedSnapshot, lockedErr := store.Load(path)
+	if lockedErr == nil {
+		return lockedSnapshot, false, "", nil
+	}
+	if errors.Is(lockedErr, store.ErrNotFound) {
+		return store.Snapshot{}, true, "", nil
+	}
+	lockedInfo, statErr := os.Stat(path)
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return store.Snapshot{}, true, "", nil
+		}
+		return store.Snapshot{}, false, "", statErr
+	}
+	if !os.SameFile(initialInfo, lockedInfo) {
+		return store.Snapshot{}, false, "", fmt.Errorf("existing index changed while its invalid state was being verified")
+	}
+	preserved, preserveErr := preserve(path, now)
+	if preserveErr != nil {
+		return store.Snapshot{}, false, "", fmt.Errorf("existing index is invalid (%v); preserving it failed: %w", lockedErr, preserveErr)
+	}
+	return store.Snapshot{}, true, fmt.Sprintf("Existing index was invalid (%v) and preserved at %s", lockedErr, preserved), nil
 }

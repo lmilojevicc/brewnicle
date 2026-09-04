@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/milo/brewnicle/internal/domain"
 	"github.com/milo/brewnicle/internal/history"
+	"github.com/milo/brewnicle/internal/refresh"
 	"github.com/milo/brewnicle/internal/store"
 	"github.com/milo/brewnicle/internal/ui"
 )
@@ -23,6 +24,12 @@ func testHooks(now time.Time) applicationHooks {
 		preserveInvalid: store.PreserveInvalid,
 		lookPath:        func(string) (string, error) { return "", errors.New("missing") },
 	}
+}
+
+type applicationLocker func(context.Context, func()) (refresh.ReleaseFunc, error)
+
+func (f applicationLocker) Acquire(ctx context.Context, waiting func()) (refresh.ReleaseFunc, error) {
+	return f(ctx, waiting)
 }
 
 func TestMissingIndexStartsBootstrapAfterVisibleFrame(t *testing.T) {
@@ -148,6 +155,44 @@ func TestCorruptIndexPreservationFailureIsReturned(t *testing.T) {
 	_, err := newApplicationWithHooks(context.Background(), root, hooks)
 	if err == nil || !strings.Contains(err.Error(), "invalid") || !strings.Contains(err.Error(), "rename denied") {
 		t.Fatal(err)
+	}
+}
+
+func TestWinningIndexPublishedBeforeLockedPreservationRemainsActive(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	root := filepath.Join(t.TempDir(), "cache")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(root, "index.db")
+	if err := os.WriteFile(indexPath, []byte("bad"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	added := now.Add(-time.Hour)
+	winner := []domain.Package{{Name: "winner", Kind: domain.KindFormula, InstallTarget: "winner", AddedAt: &added, UpdatedAt: now}}
+	preserved := false
+	hooks := testHooks(now)
+	hooks.preserveInvalid = func(string, time.Time) (string, error) {
+		preserved = true
+		return "", errors.New("must not preserve winner")
+	}
+	hooks.locker = applicationLocker(func(context.Context, func()) (refresh.ReleaseFunc, error) {
+		if err := publishTestIndex(indexPath, winner, now); err != nil {
+			t.Fatal(err)
+		}
+		return func() error { return nil }, nil
+	})
+	m, err := newApplicationWithHooks(context.Background(), root, hooks)
+	if err != nil || preserved || m.State() != ui.StateBrowse || len(m.Visible()) != 1 || m.Visible()[0].Name != "winner" {
+		t.Fatal(err, preserved, m.State(), m.Visible())
+	}
+	loaded, err := store.Load(indexPath)
+	if err != nil || len(loaded.Packages) != 1 || loaded.Packages[0].Name != "winner" {
+		t.Fatal(loaded, err)
+	}
+	matches, _ := filepath.Glob(indexPath + ".corrupt-*")
+	if len(matches) != 0 {
+		t.Fatal(matches)
 	}
 }
 

@@ -40,13 +40,15 @@ func (f scannerFunc) Scan(ctx context.Context, dir string, rev Revision, kind Re
 	return f(ctx, dir, rev, kind)
 }
 
-func TestInitialCloneScanFailureIsNotPromoted(t *testing.T) {
+func TestInitialCloneScanFailureKeepsReusableDownloadWithoutPromotion(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "cache")
+	clones := 0
 	runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		if args[0] == "ls-remote" {
 			return []byte("ref: refs/heads/main\tHEAD\n"), nil
 		}
 		if args[0] == "clone" {
+			clones++
 			return nil, os.MkdirAll(args[len(args)-1], 0700)
 		}
 		if len(args) > 3 && args[2] == "rev-parse" && args[3] == "--is-shallow-repository" {
@@ -55,23 +57,234 @@ func TestInitialCloneScanFailureIsNotPromoted(t *testing.T) {
 		if len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify" {
 			return []byte(strings.Repeat("a", 40) + "\n"), nil
 		}
-		if len(args) > 2 && args[2] == "update-ref" {
+		if len(args) > 3 && args[2] == "config" {
+			return []byte(CoreRemote + "\n"), nil
+		}
+		if len(args) > 3 && args[2] == "symbolic-ref" {
+			return []byte("refs/heads/main\n"), nil
+		}
+		if gitOperation(args) == "update-ref" || gitOperation(args) == "fetch" {
 			return nil, nil
 		}
-		return nil, errors.New("unexpected git invocation")
+		return nil, fmt.Errorf("unexpected git invocation %v", args)
 	})
+	scanErr := true
 	cache := Cache{
 		Root: root,
 		Git:  runner,
 		Scanner: scannerFunc(func(context.Context, string, Revision, RepoKind) (map[string]time.Time, error) {
-			return nil, errors.New("malformed history")
+			if scanErr {
+				return nil, errors.New("malformed history")
+			}
+			return map[string]time.Time{"pkg": time.Unix(1, 0)}, nil
 		}),
 	}
 	if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err == nil {
 		t.Fatal("expected scan failure")
 	}
 	if _, err := os.Lstat(filepath.Join(root, "core.git")); !os.IsNotExist(err) {
-		t.Fatalf("invalid clone was promoted: %v", err)
+		t.Fatalf("failed history was promoted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "core.git.bootstrap")); err != nil {
+		t.Fatalf("completed download was not checkpointed: %v", err)
+	}
+	scanErr = false
+	if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if clones != 1 {
+		t.Fatalf("retry cloned %d times", clones)
+	}
+	if _, err := os.Stat(filepath.Join(root, "core.git")); err != nil {
+		t.Fatalf("validated retry was not promoted: %v", err)
+	}
+}
+
+func TestInitialCloneCancellationKeepsReusableDownload(t *testing.T) {
+	root := t.TempDir()
+	clones := 0
+	runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case args[0] == "ls-remote":
+			return []byte("ref: refs/heads/main\tHEAD\n"), nil
+		case args[0] == "clone":
+			clones++
+			return nil, os.MkdirAll(args[len(args)-1], 0700)
+		case len(args) > 3 && args[2] == "rev-parse" && args[3] == "--is-shallow-repository":
+			return []byte("false\n"), nil
+		case len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify":
+			return []byte(strings.Repeat("a", 40) + "\n"), nil
+		case len(args) > 3 && args[2] == "config":
+			return []byte(CoreRemote + "\n"), nil
+		case len(args) > 3 && args[2] == "symbolic-ref":
+			return []byte("refs/heads/main\n"), nil
+		case (gitOperation(args) == "update-ref" || gitOperation(args) == "fetch"):
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected git invocation %v", args)
+		}
+	})
+	cancelFirst := true
+	ctx, cancel := context.WithCancel(context.Background())
+	cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(scanCtx context.Context, _ string, _ Revision, _ RepoKind) (map[string]time.Time, error) {
+		if cancelFirst {
+			cancel()
+			return nil, scanCtx.Err()
+		}
+		return map[string]time.Time{"pkg": time.Unix(1, 0)}, nil
+	})}
+	if _, err := cache.prepareRepo(ctx, RepoCore, RepoState{}, nil, false); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "core.git.bootstrap")); err != nil {
+		t.Fatal(err)
+	}
+	cancelFirst = false
+	if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if clones != 1 {
+		t.Fatalf("retry cloned %d times", clones)
+	}
+}
+
+func TestInvalidButHealthyPendingCloneIsPreserved(t *testing.T) {
+	root := t.TempDir()
+	pending := filepath.Join(root, "core.git.bootstrap")
+	if err := os.MkdirAll(pending, 0700); err != nil {
+		t.Fatal(err)
+	}
+	clones, configChecks := 0, 0
+	runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case args[0] == "ls-remote":
+			return []byte("ref: refs/heads/main\tHEAD\n"), nil
+		case args[0] == "clone":
+			clones++
+			return nil, os.MkdirAll(args[len(args)-1], 0700)
+		case len(args) > 3 && args[2] == "rev-parse" && args[3] == "--is-shallow-repository":
+			return []byte("false\n"), nil
+		case len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify":
+			return []byte(strings.Repeat("a", 40) + "\n"), nil
+		case len(args) > 3 && args[2] == "config":
+			configChecks++
+			if configChecks == 1 {
+				return []byte("https://example.test/wrong.git\n"), nil
+			}
+			return []byte(CoreRemote + "\n"), nil
+		case len(args) > 3 && args[2] == "symbolic-ref":
+			return []byte("refs/heads/main\n"), nil
+		case len(args) > 2 && args[2] == "update-ref":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected git invocation %v", args)
+		}
+	})
+	cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(context.Context, string, Revision, RepoKind) (map[string]time.Time, error) {
+		return map[string]time.Time{"pkg": time.Unix(1, 0)}, nil
+	})}
+	if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err == nil || !strings.Contains(err.Error(), "unexpected remote") {
+		t.Fatal(err)
+	}
+	if clones != 0 || configChecks != 1 {
+		t.Fatalf("clones=%d config checks=%d", clones, configChecks)
+	}
+	if _, err := os.Stat(pending); err != nil {
+		t.Fatalf("healthy checkpoint was removed: %v", err)
+	}
+}
+
+func TestCorruptPendingCloneIsReclonedAfterGitScanFailure(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "core.git.bootstrap"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	clones, probes := 0, 0
+	runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case args[0] == "ls-remote":
+			return []byte("ref: refs/heads/main\tHEAD\n"), nil
+		case args[0] == "clone":
+			clones++
+			return nil, os.MkdirAll(args[len(args)-1], 0700)
+		case len(args) > 3 && args[2] == "rev-parse" && args[3] == "--is-shallow-repository":
+			return []byte("false\n"), nil
+		case len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify":
+			return []byte(strings.Repeat("a", 40) + "\n"), nil
+		case len(args) > 3 && args[2] == "config":
+			return []byte(CoreRemote + "\n"), nil
+		case len(args) > 3 && args[2] == "symbolic-ref":
+			return []byte("refs/heads/main\n"), nil
+		case (gitOperation(args) == "update-ref" || gitOperation(args) == "fetch"):
+			return nil, nil
+		case len(args) > 2 && args[2] == "fsck":
+			probes++
+			return nil, &CommandError{Args: args, Status: 2, Err: errors.New("connectivity"), Output: "broken link from commit to missing tree"}
+		default:
+			return nil, fmt.Errorf("unexpected git invocation %v", args)
+		}
+	})
+	scans := 0
+	cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(context.Context, string, Revision, RepoKind) (map[string]time.Time, error) {
+		scans++
+		if scans == 1 {
+			return nil, &CommandError{Args: []string{"log"}, Status: 128, Err: errors.New("bad object"), Output: "bad object"}
+		}
+		return map[string]time.Time{"pkg": time.Unix(1, 0)}, nil
+	})}
+	if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if clones != 1 || scans != 2 || probes != 1 {
+		t.Fatalf("clones=%d scans=%d probes=%d", clones, scans, probes)
+	}
+	if _, err := os.Stat(filepath.Join(root, "core.git")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnsafePendingSymlinkIsRejectedWithoutRemoval(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	pending := filepath.Join(root, "core.git.bootstrap")
+	if err := os.Symlink(outside, pending); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	clones := 0
+	runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case args[0] == "ls-remote":
+			return []byte("ref: refs/heads/main\tHEAD\n"), nil
+		case args[0] == "clone":
+			clones++
+			return nil, os.MkdirAll(args[len(args)-1], 0700)
+		case len(args) > 3 && args[2] == "rev-parse" && args[3] == "--is-shallow-repository":
+			return []byte("false\n"), nil
+		case len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify":
+			return []byte(strings.Repeat("a", 40) + "\n"), nil
+		case len(args) > 3 && args[2] == "config":
+			return []byte(CoreRemote + "\n"), nil
+		case len(args) > 3 && args[2] == "symbolic-ref":
+			return []byte("refs/heads/main\n"), nil
+		case len(args) > 2 && args[2] == "update-ref":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected git invocation %v", args)
+		}
+	})
+	cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(context.Context, string, Revision, RepoKind) (map[string]time.Time, error) {
+		return map[string]time.Time{"pkg": time.Unix(1, 0)}, nil
+	})}
+	if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatal(err)
+	}
+	if clones != 0 {
+		t.Fatalf("clones=%d", clones)
+	}
+	if info, err := os.Stat(outside); err != nil || !info.IsDir() {
+		t.Fatal("symlink target was changed", info, err)
+	}
+	if info, err := os.Lstat(pending); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("unsafe checkpoint was not preserved", info, err)
 	}
 }
 
@@ -154,6 +367,108 @@ func TestCacheRejectsAncestorAndNestedWriteSymlinksBeforeGit(t *testing.T) {
 				t.Fatalf("ran git before rejecting nested %s symlink", nested)
 			}
 		})
+	}
+}
+
+func TestRepositoryConfigRejectsTransportExecutionAndIncludeKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, value string
+	}{
+		{"url rewrite", "url.file:///tmp/substituted.insteadOf", "https://github.com/"},
+		{"credential helper", "credential.helper", "!/tmp/credential-helper"},
+		{"config include", "include.path", "/tmp/other-config"},
+		{"conditional include", "includeIf.gitdir:/tmp/.path", "/tmp/other-config"},
+		{"hooks path", "core.hooksPath", "/tmp/hooks"},
+		{"external transport", "protocol.ext.allow", "always"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newGitFixture(t)
+			fixture.run(nil, "config", "--local", "--unset-all", "user.email")
+			fixture.run(nil, "config", "--local", "--unset-all", "user.name")
+			fixture.run(nil, "config", "--local", tc.key, tc.value)
+			cache := Cache{Git: ExecGit{Binary: fixture.bin}}
+			if err := cache.validateRepositoryConfig(context.Background(), filepath.Join(fixture.dir, ".git"), ""); err == nil || !strings.Contains(err.Error(), "not allowed") {
+				t.Fatalf("dangerous config accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestUnsafePendingURLRewriteIsRejectedAndPreserved(t *testing.T) {
+	root := t.TempDir()
+	pending := filepath.Join(root, "core.git.bootstrap")
+	if err := os.MkdirAll(pending, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pending, "config"), []byte("[url \"file:///tmp/substituted\"]\n\tinsteadOf = https://github.com/\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fetches, clones, probes := 0, 0, 0
+	runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch gitOperation(args) {
+		case "config":
+			return []byte("url.file:///tmp/substituted.insteadof\x00"), nil
+		case "fetch":
+			fetches++
+			return nil, errors.New("must not fetch through unsafe config")
+		case "clone":
+			clones++
+			return nil, errors.New("must not clone")
+		case "fsck":
+			probes++
+			return nil, &CommandError{Args: args, Status: 2, Err: errors.New("connectivity"), Output: "broken link from commit to missing tree"}
+		default:
+			return nil, fmt.Errorf("unexpected git invocation %v", args)
+		}
+	})
+	cache := Cache{Root: root, Git: runner}
+	if _, _, _, err := cache.prepareBootstrapRepository(context.Background(), CoreRemote, "refs/heads/main", RepoCore, nil); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatal(err)
+	}
+	if fetches != 0 || clones != 0 || probes != 0 {
+		t.Fatalf("fetches=%d clones=%d probes=%d", fetches, clones, probes)
+	}
+	if _, err := os.Stat(pending); err != nil {
+		t.Fatalf("unsafe checkpoint was not preserved: %v", err)
+	}
+}
+
+func TestUnsafeHookConfigIsRejectedBeforeReferenceMutation(t *testing.T) {
+	fixture := newGitFixture(t)
+	fixture.run(nil, "config", "--local", "--unset-all", "user.email")
+	fixture.run(nil, "config", "--local", "--unset-all", "user.name")
+	marker := filepath.Join(t.TempDir(), "hook-ran")
+	hooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(hooks, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "reference-transaction"), []byte("#!/bin/sh\ntouch "+marker+"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	fixture.run(nil, "config", "--local", "core.hooksPath", hooks)
+	root := t.TempDir()
+	if err := os.Rename(filepath.Join(fixture.dir, ".git"), filepath.Join(root, "core.git")); err != nil {
+		t.Fatal(err)
+	}
+	cache := Cache{Root: root, Git: ExecGit{Binary: fixture.bin}}
+	prepared := Prepared{Updates: [2]RepoUpdate{{State: RepoState{Repo: RepoCore, TipOID: strings.Repeat("a", 40)}}}}
+	if err := cache.ReconcilePublished(context.Background(), prepared); err == nil || !strings.Contains(err.Error(), "unsafe repository config") {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("reference hook executed: %v", err)
+	}
+}
+
+func TestRepositoryConfigRejectsAlternateObjectStores(t *testing.T) {
+	fixture := newGitFixture(t)
+	alternates := filepath.Join(fixture.dir, ".git", "objects", "info", "alternates")
+	if err := os.WriteFile(alternates, []byte("/tmp/external-objects\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cache := Cache{Git: ExecGit{Binary: fixture.bin}}
+	if err := cache.validateRepositoryConfig(context.Background(), filepath.Join(fixture.dir, ".git"), ""); err == nil || !strings.Contains(err.Error(), "alternate object store") {
+		t.Fatal(err)
 	}
 }
 
@@ -247,7 +562,360 @@ func TestCacheRejectsCommitGraphWritePathsBeforeGit(t *testing.T) {
 	}
 }
 
-func TestStillShallowAfterUnshallowRunsOneRecoveryClone(t *testing.T) {
+func TestCorruptPendingFetchIsDiscardedAndReclonedOnce(t *testing.T) {
+	root := t.TempDir()
+	pending := filepath.Join(root, "core.git.bootstrap")
+	if err := os.MkdirAll(pending, 0700); err != nil {
+		t.Fatal(err)
+	}
+	clones, fetches, probes := 0, 0, 0
+	runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch gitOperation(args) {
+		case "ls-remote":
+			return []byte("ref: refs/heads/main\tHEAD\n"), nil
+		case "clone":
+			clones++
+			return nil, os.MkdirAll(args[len(args)-1], 0700)
+		case "fetch":
+			fetches++
+			return nil, &CommandError{Args: args, Status: 128, Err: errors.New("missing blob"), Output: "fatal: missing blob aaaa"}
+		case "fsck":
+			probes++
+			return nil, &CommandError{Args: args, Status: 2, Err: errors.New("connectivity"), Output: "broken link from tree to missing blob"}
+		case "config":
+			return []byte(CoreRemote + "\n"), nil
+		case "symbolic-ref":
+			return []byte("refs/heads/main\n"), nil
+		case "rev-parse":
+			if strings.Contains(strings.Join(args, " "), "--is-shallow-repository") {
+				return []byte("false\n"), nil
+			}
+			return []byte(strings.Repeat("a", 40) + "\n"), nil
+		case "update-ref":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected git invocation %v", args)
+		}
+	})
+	cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(context.Context, string, Revision, RepoKind) (map[string]time.Time, error) {
+		return map[string]time.Time{"pkg": time.Unix(1, 0)}, nil
+	})}
+	if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if clones != 1 || fetches != 1 || probes != 1 {
+		t.Fatalf("clones=%d fetches=%d probes=%d", clones, fetches, probes)
+	}
+	if _, err := os.Stat(filepath.Join(root, "core.git")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCanonicalFetchUpdateCorruptionRunsOneRecoveryClone(t *testing.T) {
+	for _, stage := range []string{"fetch", "fetched-ref", "unshallow"} {
+		t.Run(stage, func(t *testing.T) {
+			root := t.TempDir()
+			canonical := filepath.Join(root, "core.git")
+			if err := os.MkdirAll(canonical, 0700); err != nil {
+				t.Fatal(err)
+			}
+			clones, probes := 0, 0
+			runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				op := gitOperation(args)
+				joined := strings.Join(args, " ")
+				switch op {
+				case "ls-remote":
+					return []byte("ref: refs/heads/main\tHEAD\n"), nil
+				case "clone":
+					clones++
+					return nil, os.MkdirAll(args[len(args)-1], 0700)
+				case "for-each-ref":
+					return nil, nil
+				case "fetch":
+					if strings.Contains(joined, canonical) && (stage == "fetch" || stage == "unshallow" && strings.Contains(joined, "--unshallow")) {
+						return nil, &CommandError{Args: args, Status: 128, Err: errors.New("missing object"), Output: "fatal: missing blob aaaa"}
+					}
+					return nil, nil
+				case "fsck":
+					probes++
+					return nil, &CommandError{Args: args, Status: 2, Err: errors.New("connectivity"), Output: "broken link from commit to missing tree"}
+				case "rev-parse":
+					if strings.Contains(joined, "--is-shallow-repository") {
+						if stage == "unshallow" && strings.Contains(joined, canonical) {
+							return []byte("true\n"), nil
+						}
+						return []byte("false\n"), nil
+					}
+					if stage == "fetched-ref" && strings.Contains(joined, canonical) && strings.Contains(joined, FetchedRef) {
+						return nil, &CommandError{Args: args, Status: 128, Err: errors.New("bad object"), Output: "fatal: invalid sha1 pointer"}
+					}
+					return []byte(strings.Repeat("a", 40) + "\n"), nil
+				case "config":
+					return []byte(CoreRemote + "\n"), nil
+				case "symbolic-ref":
+					return []byte("refs/heads/main\n"), nil
+				case "update-ref":
+					return nil, nil
+				default:
+					return nil, fmt.Errorf("unexpected git invocation %v", args)
+				}
+			})
+			cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(context.Context, string, Revision, RepoKind) (map[string]time.Time, error) {
+				return map[string]time.Time{"recovered": time.Unix(1, 0)}, nil
+			})}
+			update, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !update.RecoveredRepository || clones != 1 || probes != 1 {
+				t.Fatalf("update=%+v clones=%d probes=%d", update, clones, probes)
+			}
+		})
+	}
+}
+
+func TestCanonicalOperationFailureRecoversOnlyAfterConfirmedCorruption(t *testing.T) {
+	for _, stage := range []string{"object-inspection", "ancestry", "incremental-scan", "full-scan"} {
+		for _, integrity := range []string{"corrupt", "healthy", "inconclusive"} {
+			t.Run(stage+"/"+integrity, func(t *testing.T) {
+				root := t.TempDir()
+				canonical := filepath.Join(root, "core.git")
+				if err := os.MkdirAll(canonical, 0700); err != nil {
+					t.Fatal(err)
+				}
+				oldOID := strings.Repeat("a", 40)
+				newOID := strings.Repeat("b", 40)
+				previous := RepoState{}
+				if stage != "full-scan" {
+					previous = RepoState{Repo: RepoCore, RemoteURL: CoreRemote, BranchRef: "refs/heads/main", TipOID: oldOID, AlgorithmVersion: AlgorithmVersion, Complete: true, Events: map[string]time.Time{"old": time.Unix(1, 0)}}
+				}
+				clones, probes := 0, 0
+				operationErr := &CommandError{Args: []string{stage}, Status: 128, Err: errors.New(stage + " failed"), Output: "bad object"}
+				runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+					op := gitOperation(args)
+					joined := strings.Join(args, " ")
+					canonicalCall := strings.Contains(joined, canonical)
+					switch op {
+					case "ls-remote":
+						return []byte("ref: refs/heads/main\tHEAD\n"), nil
+					case "for-each-ref":
+						return nil, nil
+					case "cat-file":
+						if stage == "object-inspection" && canonicalCall {
+							return nil, operationErr
+						}
+						if strings.Contains(joined, " -t ") {
+							return []byte("commit\n"), nil
+						}
+						return nil, nil
+					case "fetch", "update-ref":
+						return nil, nil
+					case "rev-parse":
+						if strings.Contains(joined, "--is-shallow-repository") {
+							return []byte("false\n"), nil
+						}
+						return []byte(newOID + "\n"), nil
+					case "merge-base":
+						if stage == "ancestry" && canonicalCall {
+							return nil, operationErr
+						}
+						return nil, nil
+					case "fsck":
+						probes++
+						switch integrity {
+						case "corrupt":
+							return nil, &CommandError{Args: args, Status: 2, Err: errors.New("connectivity"), Output: "broken link from commit to missing tree"}
+						case "inconclusive":
+							return nil, &CommandError{Args: args, Status: 2, Err: errors.New("probe failed"), Output: "unable to read object: permission denied while inspecting object store"}
+						default:
+							return nil, nil
+						}
+					case "clone":
+						clones++
+						return nil, os.MkdirAll(args[len(args)-1], 0700)
+					case "config":
+						return []byte(CoreRemote + "\n"), nil
+					case "symbolic-ref":
+						return []byte("refs/heads/main\n"), nil
+					default:
+						return nil, fmt.Errorf("unexpected git invocation %v", args)
+					}
+				})
+				cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(_ context.Context, dir string, _ Revision, _ RepoKind) (map[string]time.Time, error) {
+					if filepath.Base(dir) == "core.git" && (stage == "incremental-scan" || stage == "full-scan") {
+						return nil, operationErr
+					}
+					return map[string]time.Time{"recovered": time.Unix(1, 0)}, nil
+				})}
+				update, err := cache.prepareRepo(context.Background(), RepoCore, previous, nil, false)
+				if integrity == "corrupt" {
+					if err != nil || !update.RecoveredRepository || clones != 1 || probes != 1 {
+						t.Fatalf("update=%+v err=%v clones=%d probes=%d", update, err, clones, probes)
+					}
+					return
+				}
+				if err == nil || !strings.Contains(err.Error(), stage+" failed") || clones != 0 || probes != 1 {
+					t.Fatalf("err=%v clones=%d probes=%d", err, clones, probes)
+				}
+				if _, statErr := os.Stat(canonical); statErr != nil {
+					t.Fatalf("healthy or inconclusive repository was removed: %v", statErr)
+				}
+			})
+		}
+	}
+}
+
+func TestPendingFullScanFailurePreservesCheckpointWithoutConfirmedCorruption(t *testing.T) {
+	for _, integrity := range []string{"healthy", "inconclusive"} {
+		t.Run(integrity, func(t *testing.T) {
+			root := t.TempDir()
+			pending := filepath.Join(root, "core.git.bootstrap")
+			if err := os.MkdirAll(pending, 0700); err != nil {
+				t.Fatal(err)
+			}
+			clones, probes := 0, 0
+			runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				switch gitOperation(args) {
+				case "ls-remote":
+					return []byte("ref: refs/heads/main\tHEAD\n"), nil
+				case "config":
+					return []byte(CoreRemote + "\n"), nil
+				case "symbolic-ref":
+					return []byte("refs/heads/main\n"), nil
+				case "rev-parse":
+					if strings.Contains(strings.Join(args, " "), "--is-shallow-repository") {
+						return []byte("false\n"), nil
+					}
+					return []byte(strings.Repeat("a", 40) + "\n"), nil
+				case "fetch", "update-ref":
+					return nil, nil
+				case "fsck":
+					probes++
+					if integrity == "healthy" {
+						return nil, nil
+					}
+					return nil, &CommandError{Args: args, Status: 2, Err: errors.New("probe failed"), Output: "resource temporarily unavailable"}
+				case "clone":
+					clones++
+					return nil, nil
+				default:
+					return nil, fmt.Errorf("unexpected git invocation %v", args)
+				}
+			})
+			cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(context.Context, string, Revision, RepoKind) (map[string]time.Time, error) {
+				return nil, &CommandError{Args: []string{"log"}, Status: 128, Err: errors.New("bad object"), Output: "bad object"}
+			})}
+			if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err == nil || !strings.Contains(err.Error(), "bad object") {
+				t.Fatal(err)
+			}
+			if clones != 0 || probes != 1 {
+				t.Fatalf("clones=%d probes=%d", clones, probes)
+			}
+			if _, err := os.Stat(pending); err != nil {
+				t.Fatalf("checkpoint was removed: %v", err)
+			}
+		})
+	}
+}
+
+func TestPendingFetchTransientAndLaunchFailuresPreserveCheckpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"network", &CommandError{Status: 128, Err: errors.New("connection timed out"), Output: "connection timed out"}},
+		{"authentication", &CommandError{Status: 128, Err: errors.New("authentication failed"), Output: "authentication failed"}},
+		{"permission", &CommandError{Status: 128, Err: errors.New("permission denied"), Output: "permission denied"}},
+		{"resource", &CommandError{Status: 128, Err: errors.New("resource temporarily unavailable"), Output: "resource temporarily unavailable"}},
+		{"launch", &CommandError{Status: -1, Err: errors.New("executable not found")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			pending := filepath.Join(root, "core.git.bootstrap")
+			if err := os.MkdirAll(pending, 0700); err != nil {
+				t.Fatal(err)
+			}
+			clones, probes := 0, 0
+			runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				switch gitOperation(args) {
+				case "config":
+					return []byte(CoreRemote + "\n"), nil
+				case "symbolic-ref":
+					return []byte("refs/heads/main\n"), nil
+				case "rev-parse":
+					if strings.Contains(strings.Join(args, " "), "--is-shallow-repository") {
+						return []byte("false\n"), nil
+					}
+					return []byte(strings.Repeat("a", 40) + "\n"), nil
+				case "fetch":
+					return nil, tc.err
+				case "fsck":
+					probes++
+					return nil, nil
+				case "clone":
+					clones++
+					return nil, nil
+				default:
+					return nil, fmt.Errorf("unexpected git invocation %v", args)
+				}
+			})
+			cache := Cache{Root: root, Git: runner}
+			if _, _, _, err := cache.prepareBootstrapRepository(context.Background(), CoreRemote, "refs/heads/main", RepoCore, nil); err == nil {
+				t.Fatal("expected fetch failure")
+			}
+			if clones != 0 || probes != 0 {
+				t.Fatalf("clones=%d probes=%d", clones, probes)
+			}
+			if _, err := os.Stat(pending); err != nil {
+				t.Fatalf("checkpoint was removed: %v", err)
+			}
+		})
+	}
+}
+
+func TestHealthyConnectivityAfterFetchFailurePreservesCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	pending := filepath.Join(root, "core.git.bootstrap")
+	if err := os.MkdirAll(pending, 0700); err != nil {
+		t.Fatal(err)
+	}
+	clones, probes := 0, 0
+	runner := gitRunnerFunc(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch gitOperation(args) {
+		case "config":
+			return []byte(CoreRemote + "\n"), nil
+		case "symbolic-ref":
+			return []byte("refs/heads/main\n"), nil
+		case "rev-parse":
+			if strings.Contains(strings.Join(args, " "), "--is-shallow-repository") {
+				return []byte("false\n"), nil
+			}
+			return []byte(strings.Repeat("a", 40) + "\n"), nil
+		case "fetch":
+			return nil, &CommandError{Status: 128, Err: errors.New("remote disconnected"), Output: "remote disconnected"}
+		case "fsck":
+			probes++
+			return nil, nil
+		case "clone":
+			clones++
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected git invocation %v", args)
+		}
+	})
+	cache := Cache{Root: root, Git: runner}
+	if _, _, _, err := cache.prepareBootstrapRepository(context.Background(), CoreRemote, "refs/heads/main", RepoCore, nil); err == nil {
+		t.Fatal("expected fetch failure")
+	}
+	if clones != 0 || probes != 1 {
+		t.Fatalf("clones=%d probes=%d", clones, probes)
+	}
+	if _, err := os.Stat(pending); err != nil {
+		t.Fatalf("checkpoint was removed: %v", err)
+	}
+}
+
+func TestStillShallowWithHealthyConnectivityDoesNotRecoveryClone(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "core.git")
 	if err := os.MkdirAll(repo, 0700); err != nil {
@@ -265,7 +933,7 @@ func TestStillShallowAfterUnshallowRunsOneRecoveryClone(t *testing.T) {
 		if len(args) > 2 && args[2] == "for-each-ref" {
 			return nil, nil
 		}
-		if len(args) > 2 && args[2] == "fetch" {
+		if gitOperation(args) == "fetch" {
 			return nil, nil
 		}
 		if len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify" {
@@ -278,20 +946,28 @@ func TestStillShallowAfterUnshallowRunsOneRecoveryClone(t *testing.T) {
 			}
 			return []byte("false\n"), nil
 		}
+		if len(args) > 3 && args[2] == "config" {
+			return []byte(CoreRemote + "\n"), nil
+		}
+		if len(args) > 3 && args[2] == "symbolic-ref" {
+			return []byte("refs/heads/main\n"), nil
+		}
 		if len(args) > 2 && args[2] == "update-ref" {
+			return nil, nil
+		}
+		if len(args) > 2 && args[2] == "fsck" {
 			return nil, nil
 		}
 		return nil, errors.New("unexpected git invocation")
 	})
 	cache := Cache{Root: root, Git: runner, Scanner: scannerFunc(func(context.Context, string, Revision, RepoKind) (map[string]time.Time, error) {
-		return map[string]time.Time{"recovered": time.Unix(1, 0)}, nil
+		return map[string]time.Time{"must-not-scan": time.Unix(1, 0)}, nil
 	})}
-	update, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false)
-	if err != nil || !update.RecoveredRepository || update.State.Events["recovered"].IsZero() {
-		t.Fatal(update, err)
+	if _, err := cache.prepareRepo(context.Background(), RepoCore, RepoState{}, nil, false); err == nil || !strings.Contains(err.Error(), "remains shallow") {
+		t.Fatal(err)
 	}
-	if clones != 1 {
-		t.Fatalf("recovery clones=%d", clones)
+	if clones != 0 {
+		t.Fatalf("healthy repository triggered %d recovery clones", clones)
 	}
 }
 
@@ -309,7 +985,7 @@ func TestUnshallowAuthenticationFailureDoesNotRecoveryClone(t *testing.T) {
 		if len(args) > 2 && args[2] == "for-each-ref" {
 			return nil, nil
 		}
-		if len(args) > 2 && args[2] == "fetch" {
+		if gitOperation(args) == "fetch" {
 			for _, arg := range args {
 				if arg == "--unshallow" {
 					return nil, &CommandError{Status: 128, Err: errors.New("authentication failed"), Output: "authentication failed"}
@@ -367,7 +1043,7 @@ func TestReconcileFirstMigrationUsesRepositoryHashWidth(t *testing.T) {
 	}
 }
 
-func TestExistingCacheFetchUsesExplicitRemote(t *testing.T) {
+func TestExistingCacheFetchPinsValidatedOriginURL(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "core.git")
 	if err := os.MkdirAll(repo, 0700); err != nil {
@@ -378,7 +1054,7 @@ func TestExistingCacheFetchUsesExplicitRemote(t *testing.T) {
 		if args[0] == "ls-remote" {
 			return []byte("ref: refs/heads/main\tHEAD\n"), nil
 		}
-		if len(args) > 2 && args[2] == "fetch" {
+		if gitOperation(args) == "fetch" {
 			fetchArgs = append([]string(nil), args...)
 			return nil, nil
 		}
@@ -407,8 +1083,8 @@ func TestExistingCacheFetchUsesExplicitRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(fetchArgs, " ")
-	if !strings.Contains(joined, CoreRemote) || strings.Contains(joined, " origin ") {
-		t.Fatalf("fetch did not enforce explicit remote: %q", joined)
+	if !strings.Contains(joined, "remote.origin.url="+CoreRemote) || !strings.Contains(joined, " origin ") {
+		t.Fatalf("fetch did not pin the validated origin URL: %q", joined)
 	}
 }
 
@@ -423,6 +1099,12 @@ func recoveryFixture(t *testing.T, root string, events map[string]time.Time, ops
 		}
 		if len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify" {
 			return []byte(strings.Repeat("a", 40) + "\n"), nil
+		}
+		if len(args) > 3 && args[2] == "config" {
+			return []byte(CoreRemote + "\n"), nil
+		}
+		if len(args) > 3 && args[2] == "symbolic-ref" {
+			return []byte("refs/heads/main\n"), nil
 		}
 		if len(args) > 2 && args[2] == "update-ref" {
 			return nil, nil
@@ -462,7 +1144,7 @@ func TestRecoveryPromotionFailureRestoresCanonical(t *testing.T) {
 	calls := 0
 	ops := &cacheOps{rename: func(from, to string) error {
 		calls++
-		if calls == 2 {
+		if calls == 3 {
 			return errors.New("promote")
 		}
 		return os.Rename(from, to)
@@ -486,7 +1168,7 @@ func TestRecoveryRestoreFailureExposesBackup(t *testing.T) {
 	calls := 0
 	ops := &cacheOps{rename: func(from, to string) error {
 		calls++
-		if calls >= 2 {
+		if calls >= 3 {
 			return fmt.Errorf("rename-%d", calls)
 		}
 		return os.Rename(from, to)
@@ -571,7 +1253,7 @@ func TestLargeAggregateOneCommitUsesOnlyExactRange(t *testing.T) {
 		if len(args) > 2 && args[2] == "update-ref" {
 			return nil, nil
 		}
-		if len(args) > 2 && args[2] == "fetch" {
+		if gitOperation(args) == "fetch" {
 			return nil, nil
 		}
 		if len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify" {
@@ -798,7 +1480,7 @@ func TestFetchedAheadUsesAuthoritativeDatabaseCursor(t *testing.T) {
 		if len(args) > 3 && args[2] == "cat-file" && args[3] == "-t" {
 			return []byte("commit\n"), nil
 		}
-		if len(args) > 2 && (args[2] == "update-ref" || args[2] == "fetch") {
+		if gitOperation(args) == "update-ref" || gitOperation(args) == "fetch" {
 			return nil, nil
 		}
 		if len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify" {
@@ -836,6 +1518,12 @@ func TestInitialCloneProgressIsNotMigration(t *testing.T) {
 		}
 		if len(args) > 3 && args[2] == "rev-parse" && args[3] == "--verify" {
 			return []byte(strings.Repeat("a", 40) + "\n"), nil
+		}
+		if len(args) > 3 && args[2] == "config" {
+			return []byte(CoreRemote + "\n"), nil
+		}
+		if len(args) > 3 && args[2] == "symbolic-ref" {
+			return []byte("refs/heads/main\n"), nil
 		}
 		if len(args) > 2 && args[2] == "update-ref" {
 			return nil, nil

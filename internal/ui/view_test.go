@@ -303,7 +303,7 @@ func TestTruncateAndWrapUseCellWidth(t *testing.T) {
 		}
 	}
 	p := domain.Package{Name: "界", Kind: domain.KindFormula, Description: "界界 e\u0301e\u0301", InstallTarget: "界"}
-	for _, line := range detailLines(p, 8, uiPkgs()[0].UpdatedAt, false, makeStyles(true)) {
+	for _, line := range detailLines(p, 8, uiPkgs()[0].UpdatedAt, false, DatesReady, makeStyles(true)) {
 		if lipgloss.Width(line) > 8 {
 			t.Fatalf("detail line too wide: %q", line)
 		}

@@ -78,6 +78,10 @@ func (c *Cache) ReconcilePublished(ctx context.Context, prepared Prepared) error
 			errs = append(errs, fmt.Errorf("%s published ref: invalid hash width", update.State.Repo))
 			continue
 		}
+		if err = c.validateRepositoryConfig(ctx, repoPath, update.State.RemoteURL); err != nil {
+			errs = append(errs, fmt.Errorf("%s published ref: unsafe repository config: %w", update.State.Repo, err))
+			continue
+		}
 		_, err = c.git().Run(ctx, "", "--git-dir", repoPath, "update-ref", PublishedRef, update.State.TipOID, expected)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s published ref: %w", update.State.Repo, err))
@@ -113,6 +117,11 @@ func (c *Cache) prepareRepo(ctx context.Context, kind RepoKind, previous RepoSta
 		}
 		return c.cloneAndPromote(ctx, repo, remote, branch, kind, progress)
 	}
+	if err = c.validateRepositoryConfig(ctx, repo, remote); err != nil {
+		// Configuration failures are not object-corruption evidence. Do not run
+		// fsck through repository-controlled configuration or replace the cache.
+		return RepoUpdate{}, fmt.Errorf("unsafe history repository config: %w", err)
+	}
 
 	observed, err := c.observeRef(ctx, repo, PublishedRef)
 	if err != nil {
@@ -123,7 +132,7 @@ func (c *Cache) prepareRepo(ctx context.Context, kind RepoKind, previous RepoSta
 	if oldUsable {
 		commit, inspectErr := c.objectIsCommit(ctx, repo, previous.TipOID)
 		if inspectErr != nil {
-			if !recovering && c.recoverable(inspectErr) {
+			if !recovering && c.shouldRecoverRepository(ctx, repo, inspectErr) {
 				return c.recover(ctx, repo, remote, branch, kind, progress)
 			}
 			return RepoUpdate{}, inspectErr
@@ -149,10 +158,16 @@ func (c *Cache) prepareRepo(ctx context.Context, kind RepoKind, previous RepoSta
 		progress(string(kind) + ": fetching new commits")
 	}
 	if err = c.fetch(ctx, repo, remote, branch, false); err != nil {
+		if !recovering && c.shouldRecoverRepository(ctx, repo, err) {
+			return c.recover(ctx, repo, remote, branch, kind, progress)
+		}
 		return RepoUpdate{}, err
 	}
 	newOID, err := c.resolveCommit(ctx, repo, FetchedRef)
 	if err != nil {
+		if !recovering && c.shouldRecoverRepository(ctx, repo, err) {
+			return c.recover(ctx, repo, remote, branch, kind, progress)
+		}
 		return RepoUpdate{}, err
 	}
 
@@ -169,7 +184,7 @@ func (c *Cache) prepareRepo(ctx context.Context, kind RepoKind, previous RepoSta
 	} else if oldUsable {
 		ancestor, ancestorErr := c.isAncestor(ctx, repo, previous.TipOID, newOID)
 		if ancestorErr != nil {
-			if !recovering && c.recoverable(ancestorErr) {
+			if !recovering && c.shouldRecoverRepository(ctx, repo, ancestorErr) {
 				return c.recover(ctx, repo, remote, branch, kind, progress)
 			}
 			return RepoUpdate{}, ancestorErr
@@ -182,7 +197,7 @@ func (c *Cache) prepareRepo(ctx context.Context, kind RepoKind, previous RepoSta
 			}
 			delta, scanErr := c.scanner().Scan(ctx, repo, Revision{FromOID: base, ToOID: newOID}, kind)
 			if scanErr != nil {
-				if !recovering && c.recoverable(scanErr) {
+				if !recovering && c.shouldRecoverRepository(ctx, repo, scanErr) {
 					return c.recover(ctx, repo, remote, branch, kind, progress)
 				}
 				return RepoUpdate{}, scanErr
@@ -195,14 +210,14 @@ func (c *Cache) prepareRepo(ctx context.Context, kind RepoKind, previous RepoSta
 			progress(string(kind) + ": rebuilding complete history")
 		}
 		if err = c.ensureNonShallow(ctx, repo, remote, branch); err != nil {
-			if !recovering && c.recoverable(err) {
+			if !recovering && c.shouldRecoverRepository(ctx, repo, err) {
 				return c.recover(ctx, repo, remote, branch, kind, progress)
 			}
 			return RepoUpdate{}, err
 		}
 		events, err = c.scanner().Scan(ctx, repo, Revision{ToOID: newOID}, kind)
 		if err != nil {
-			if !recovering && c.recoverable(err) {
+			if !recovering && c.shouldRecoverRepository(ctx, repo, err) {
 				return c.recover(ctx, repo, remote, branch, kind, progress)
 			}
 			return RepoUpdate{}, err
@@ -222,27 +237,7 @@ func (c *Cache) recover(ctx context.Context, canonical, remote, branch string, k
 	if progress != nil {
 		progress(string(kind) + ": recovering local history cache")
 	}
-	parent := filepath.Dir(canonical)
-	tmp, err := os.MkdirTemp(parent, "."+filepath.Base(canonical)+"-recovery-")
-	if err != nil {
-		return RepoUpdate{}, err
-	}
-	_ = os.Remove(tmp)
-	defer c.removeAll()(tmp)
-	if err = c.cloneInto(ctx, tmp, remote, branch, true); err != nil {
-		return RepoUpdate{}, err
-	}
-	if err = c.ensureNonShallow(ctx, tmp, remote, branch); err != nil {
-		return RepoUpdate{}, err
-	}
-	newOID, err := c.resolveCommit(ctx, tmp, "HEAD")
-	if err != nil {
-		return RepoUpdate{}, err
-	}
-	if _, err = c.git().Run(ctx, "", "--git-dir", tmp, "update-ref", FetchedRef, newOID); err != nil {
-		return RepoUpdate{}, err
-	}
-	events, err := c.scanner().Scan(ctx, tmp, Revision{ToOID: newOID}, kind)
+	pending, newOID, events, err := c.scanBootstrapRepository(ctx, remote, branch, kind, progress)
 	if err != nil {
 		return RepoUpdate{}, err
 	}
@@ -254,7 +249,7 @@ func (c *Cache) recover(ctx context.Context, canonical, remote, branch string, k
 	if err = c.rename()(canonical, backup); err != nil {
 		return RepoUpdate{}, err
 	}
-	if err = c.rename()(tmp, canonical); err != nil {
+	if err = c.rename()(pending, canonical); err != nil {
 		restoreErr := c.rename()(backup, canonical)
 		if restoreErr != nil {
 			return RepoUpdate{}, errors.Join(fmt.Errorf("promote recovered repository: %w", err), fmt.Errorf("restore repository from %s: %w", backup, restoreErr))
@@ -268,27 +263,7 @@ func (c *Cache) recover(ctx context.Context, canonical, remote, branch string, k
 }
 
 func (c *Cache) cloneAndPromote(ctx context.Context, repo, remote, branch string, kind RepoKind, progress ProgressFunc) (RepoUpdate, error) {
-	parent := filepath.Dir(repo)
-	tmp, err := os.MkdirTemp(parent, "."+filepath.Base(repo)+"-tmp-")
-	if err != nil {
-		return RepoUpdate{}, err
-	}
-	_ = os.Remove(tmp)
-	defer c.removeAll()(tmp)
-	if err = c.cloneInto(ctx, tmp, remote, branch, true); err != nil {
-		return RepoUpdate{}, err
-	}
-	if err = c.ensureNonShallow(ctx, tmp, remote, branch); err != nil {
-		return RepoUpdate{}, err
-	}
-	newOID, err := c.resolveCommit(ctx, tmp, "HEAD")
-	if err != nil {
-		return RepoUpdate{}, err
-	}
-	if _, err = c.git().Run(ctx, "", "--git-dir", tmp, "update-ref", FetchedRef, newOID); err != nil {
-		return RepoUpdate{}, err
-	}
-	events, err := c.scanner().Scan(ctx, tmp, Revision{ToOID: newOID}, kind)
+	pending, newOID, events, err := c.scanBootstrapRepository(ctx, remote, branch, kind, progress)
 	if err != nil {
 		return RepoUpdate{}, err
 	}
@@ -296,10 +271,270 @@ func (c *Cache) cloneAndPromote(ctx context.Context, repo, remote, branch string
 	if err = validateCandidateState(state, remote); err != nil {
 		return RepoUpdate{}, err
 	}
-	if err = c.rename()(tmp, repo); err != nil {
+	if err = c.rename()(pending, repo); err != nil {
 		return RepoUpdate{}, err
 	}
 	return RepoUpdate{State: state, Mode: ScanFull, PublishedExpectation: RefExpectation{}}, nil
+}
+
+func (c *Cache) scanBootstrapRepository(ctx context.Context, remote, branch string, kind RepoKind, progress ProgressFunc) (string, string, map[string]time.Time, error) {
+	pending, newOID, reused, err := c.prepareBootstrapRepository(ctx, remote, branch, kind, progress)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if progress != nil {
+		progress(string(kind) + ": scanning complete history")
+	}
+	events, err := c.scanner().Scan(ctx, pending, Revision{ToOID: newOID}, kind)
+	if err != nil && reused && c.shouldRecoverRepository(ctx, pending, err) {
+		if removeErr := c.removeCorruptBootstrapRepository(bootstrapRepoName(kind)); removeErr != nil {
+			return "", "", nil, errors.Join(err, removeErr)
+		}
+		pending, newOID, _, err = c.prepareBootstrapRepository(ctx, remote, branch, kind, progress)
+		if err == nil {
+			events, err = c.scanner().Scan(ctx, pending, Revision{ToOID: newOID}, kind)
+		}
+	}
+	return pending, newOID, events, err
+}
+
+// prepareBootstrapRepository checkpoints a completed, validated clone before
+// the expensive scan. The pending repository is data only: it does not imply a
+// complete history state or an authoritative published index.
+func (c *Cache) prepareBootstrapRepository(ctx context.Context, remote, branch string, kind RepoKind, progress ProgressFunc) (string, string, bool, error) {
+	name := bootstrapRepoName(kind)
+	pending, exists, err := c.safeRepository(name)
+	if err != nil {
+		// An unsafe or inaccessible checkpoint is preserved for diagnosis. It is
+		// never deleted merely because path validation failed.
+		return "", "", false, fmt.Errorf("invalid pending history repository: %w", err)
+	}
+	if exists {
+		_, validateErr := c.validateBootstrapRepository(ctx, pending, remote, branch)
+		if validateErr == nil {
+			if progress != nil {
+				progress(string(kind) + ": reusing completed history download")
+			}
+			// A checkpoint may outlive the catalog request that created it. Fetch
+			// the current branch tip before scanning so reuse cannot silently
+			// produce unknown dates for packages added since that attempt.
+			if err = c.fetch(ctx, pending, remote, branch, false); err == nil {
+				err = c.ensureNonShallow(ctx, pending, remote, branch)
+			}
+			var oid string
+			if err == nil {
+				oid, err = c.resolveCommit(ctx, pending, FetchedRef)
+			}
+			if err == nil {
+				return pending, oid, true, nil
+			}
+			if !c.shouldRecoverRepository(ctx, pending, err) {
+				return "", "", false, err
+			}
+			if removeErr := c.removeCorruptBootstrapRepository(name); removeErr != nil {
+				return "", "", false, errors.Join(fmt.Errorf("corrupt pending history repository: %w", err), removeErr)
+			}
+			exists = false
+		} else {
+			if !c.shouldRecoverRepository(ctx, pending, validateErr) {
+				return "", "", false, validateErr
+			}
+			if removeErr := c.removeCorruptBootstrapRepository(name); removeErr != nil {
+				return "", "", false, errors.Join(fmt.Errorf("corrupt pending history repository: %w", validateErr), removeErr)
+			}
+			exists = false
+		}
+	}
+
+	parent := filepath.Dir(pending)
+	tmp, err := os.MkdirTemp(parent, "."+repoName(kind)+"-tmp-")
+	if err != nil {
+		return "", "", false, err
+	}
+	_ = os.Remove(tmp)
+	defer c.removeAll()(tmp)
+	if err = c.cloneInto(ctx, tmp, remote, branch, true); err != nil {
+		return "", "", false, err
+	}
+	if err = c.ensureNonShallow(ctx, tmp, remote, branch); err != nil {
+		return "", "", false, err
+	}
+	newOID, err := c.validateBootstrapRepository(ctx, tmp, remote, branch)
+	if err != nil {
+		return "", "", false, err
+	}
+	if _, err = c.git().Run(ctx, "", "--git-dir", tmp, "update-ref", FetchedRef, newOID); err != nil {
+		return "", "", false, err
+	}
+	if err = c.rename()(tmp, pending); err != nil {
+		return "", "", false, err
+	}
+	return pending, newOID, false, nil
+}
+
+func (c *Cache) validateBootstrapRepository(ctx context.Context, repo, remote, branch string) (string, error) {
+	safe, exists, err := c.safeRepository(filepath.Base(repo))
+	if err != nil {
+		return "", nonRecoverableError{err}
+	}
+	if !exists || filepath.Clean(safe) != filepath.Clean(repo) {
+		return "", nonRecoverableError{fmt.Errorf("pending history repository path is not trusted")}
+	}
+	repo = safe
+	if err = validateOwnedDirectory(repo); err != nil {
+		return "", nonRecoverableError{err}
+	}
+	if err = c.validateRepositoryConfig(ctx, repo, remote); err != nil {
+		// fsck must never be launched through repository configuration that has
+		// not passed the allowlist and alternate-object checks.
+		return "", nonRecoverableError{err}
+	}
+	if _, configErr := os.Lstat(filepath.Join(repo, "config")); os.IsNotExist(configErr) {
+		// Test Git runners use directory-only repositories. Preserve the remote
+		// assertion there without weakening validation of real repository config.
+		out, remoteErr := c.git().Run(ctx, "", "--git-dir", repo, "config", "--get", "remote.origin.url")
+		if remoteErr != nil {
+			return "", remoteErr
+		}
+		if strings.TrimSpace(string(out)) != remote {
+			return "", fmt.Errorf("pending history repository has unexpected remote")
+		}
+	}
+	out, err := c.git().Run(ctx, "", "--git-dir", repo, "rev-parse", "--is-shallow-repository")
+	if err != nil {
+		return "", err
+	}
+	if string(out) != "false\n" {
+		return "", fmt.Errorf("pending history repository is shallow")
+	}
+	out, err = c.git().Run(ctx, "", "--git-dir", repo, "symbolic-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(out)) != branch {
+		return "", fmt.Errorf("pending history repository has unexpected branch")
+	}
+	return c.resolveCommit(ctx, repo, "HEAD")
+}
+
+// removeCorruptBootstrapRepository is called only after shouldRecoverRepository
+// has positively identified reachable-object corruption.
+func (c *Cache) removeCorruptBootstrapRepository(name string) error {
+	if filepath.Base(name) != name || name == "." || name == ".." {
+		return fmt.Errorf("unsafe pending repository name %q", name)
+	}
+	root, err := filepath.Abs(c.Root)
+	if err != nil {
+		return err
+	}
+	boundary := c.Boundary
+	if boundary == "" {
+		boundary = filepath.Dir(root)
+	}
+	root, err = secureDirectoryWithin(boundary, root)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(root, name)
+	if !pathWithin(root, path) {
+		return fmt.Errorf("unsafe pending repository path")
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return os.Remove(path)
+	}
+	if err = validateOwnedDirectory(path); err != nil {
+		return err
+	}
+	return c.removeAll()(path)
+}
+
+func validateOwnedDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("history repository must be a real directory")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("history repository is not owned by the current user")
+	}
+	return nil
+}
+
+var safeRepositoryConfigKeys = map[string]bool{
+	"core.bare":                        true,
+	"core.filemode":                    true,
+	"core.ignorecase":                  true,
+	"core.logallrefupdates":            true,
+	"core.precomposeunicode":           true,
+	"core.repositoryformatversion":     true,
+	"extensions.objectformat":          true,
+	"extensions.partialclone":          true,
+	"remote.origin.fetch":              true,
+	"remote.origin.partialclonefilter": true,
+	"remote.origin.promisor":           true,
+	"remote.origin.url":                true,
+}
+
+// validateRepositoryConfig rejects repository-controlled Git behavior before
+// any cached repository is mutated. Includes are deliberately not followed.
+func (c *Cache) validateRepositoryConfig(ctx context.Context, repo, remote string) error {
+	for _, relative := range []string{filepath.Join("objects", "info", "alternates"), filepath.Join("objects", "info", "http-alternates")} {
+		_, err := os.Lstat(filepath.Join(repo, relative))
+		if err == nil {
+			return fmt.Errorf("repository alternate object store %q is not allowed", relative)
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	configPath := filepath.Join(repo, "config")
+	info, err := os.Lstat(configPath)
+	if os.IsNotExist(err) {
+		// Injected repository fixtures may omit config. Production clones always
+		// create it; mutations remain hook- and transport-hardened regardless.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("repository config must be a regular file")
+	}
+	out, err := c.git().Run(ctx, "", "config", "--file", configPath, "--no-includes", "--name-only", "--null", "--list")
+	if err != nil {
+		return fmt.Errorf("read repository config: %w", err)
+	}
+	for _, raw := range strings.Split(string(out), "\x00") {
+		key := strings.ToLower(strings.TrimSpace(raw))
+		if key == "" {
+			continue
+		}
+		if !safeRepositoryConfigKeys[key] {
+			return fmt.Errorf("repository config key %q is not allowed", key)
+		}
+	}
+	if remote == "" {
+		return nil
+	}
+	out, err = c.git().Run(ctx, "", "config", "--file", configPath, "--no-includes", "--get-all", "remote.origin.url")
+	if err != nil {
+		return fmt.Errorf("read repository remote: %w", err)
+	}
+	values := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if len(values) != 1 || strings.TrimSpace(values[0]) != remote {
+		return fmt.Errorf("history repository has unexpected remote")
+	}
+	return nil
 }
 
 func (c *Cache) cloneInto(ctx context.Context, dst, remote, branch string, filter bool) error {
@@ -317,18 +552,21 @@ func (c *Cache) cloneInto(ctx context.Context, dst, remote, branch string, filte
 }
 
 func (c *Cache) fetch(ctx context.Context, repo, remote, branch string, unshallow bool) error {
-	args := []string{"--git-dir", repo, "fetch", "--filter=blob:none"}
+	// Pin the validated origin URL through command-line configuration and fetch
+	// by name. Fetching a URL with a partial-clone filter creates a persistent
+	// remote.<url>.promisor section, making the next validation fail.
+	args := []string{"--git-dir", repo, "-c", "remote.origin.url=" + remote, "fetch", "--filter=blob:none"}
 	if unshallow {
 		args = append(args, "--unshallow")
 	}
-	args = append(args, remote, "+"+branch+":"+FetchedRef)
+	args = append(args, "origin", "+"+branch+":"+FetchedRef)
 	out, err := c.git().Run(ctx, "", args...)
 	if err != nil && unsupportedFilter(string(out)+err.Error()) {
-		args = []string{"--git-dir", repo, "fetch"}
+		args = []string{"--git-dir", repo, "-c", "remote.origin.url=" + remote, "fetch"}
 		if unshallow {
 			args = append(args, "--unshallow")
 		}
-		args = append(args, remote, "+"+branch+":"+FetchedRef)
+		args = append(args, "origin", "+"+branch+":"+FetchedRef)
 		_, err = c.git().Run(ctx, "", args...)
 	}
 	return err
@@ -365,12 +603,31 @@ func (c *Cache) ensureNonShallow(ctx context.Context, repo, remote, branch strin
 
 type nonRecoverableError struct{ error }
 
-func (c *Cache) recoverable(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || commandLaunchFailed(err) || isNetworkOrAuthError(err) {
+func (e nonRecoverableError) Unwrap() error { return e.error }
+
+// shouldRecoverRepository only authorizes deletion after a hardened local fsck
+// confirms that reachable repository data is corrupt. Transient remote and
+// process-launch failures preserve the existing repository unchanged.
+func (c *Cache) shouldRecoverRepository(ctx context.Context, repo string, operationErr error) bool {
+	var nonRecoverable nonRecoverableError
+	if operationErr == nil || ctx.Err() != nil || errors.Is(operationErr, context.Canceled) || errors.Is(operationErr, context.DeadlineExceeded) || errors.As(operationErr, &nonRecoverable) || commandLaunchFailed(operationErr) || isNetworkOrAuthError(operationErr) || isLocalResourceError(operationErr) {
 		return false
 	}
-	var nonrecoverable nonRecoverableError
-	return !errors.As(err, &nonrecoverable)
+	_, probeErr := c.git().Run(ctx, "", "--git-dir", repo, "fsck", "--connectivity-only", "--no-dangling")
+	if probeErr == nil || ctx.Err() != nil || commandLaunchFailed(probeErr) {
+		return false
+	}
+	var commandErr *CommandError
+	if !errors.As(probeErr, &commandErr) || commandErr.Status <= 0 {
+		return false
+	}
+	message := strings.ToLower(commandErr.Output + " " + commandErr.Error())
+	for _, marker := range []string{"missing ", "missing blob", "missing tree", "missing commit", "broken link", "invalid sha1 pointer", "invalid sha256 pointer", "object corrupt", "corrupt loose object", " is empty", "is corrupt", "sha1 mismatch", "sha256 mismatch", "bad sha1 file", "bad sha256 file"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Cache) observeRef(ctx context.Context, repo, ref string) (string, error) {
@@ -476,6 +733,8 @@ func repoName(kind RepoKind) string {
 	}
 	return "cask.git"
 }
+
+func bootstrapRepoName(kind RepoKind) string { return repoName(kind) + ".bootstrap" }
 
 func (c *Cache) repairRecoveryBackups(name string) error {
 	root, err := filepath.Abs(c.Root)
