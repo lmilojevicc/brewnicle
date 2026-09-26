@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/milo/brewnicle/internal/domain"
 )
@@ -36,13 +37,30 @@ func NewClient(h *http.Client) *Client {
 }
 
 func (c *Client) Fetch(ctx context.Context) (Result, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var fs []formulaJSON
-	if err := c.get(ctx, c.FormulaURL, &fs); err != nil {
-		return Result{}, fmt.Errorf("formula catalog: %w", err)
-	}
 	var cs []caskJSON
-	if err := c.get(ctx, c.CaskURL, &cs); err != nil {
-		return Result{}, fmt.Errorf("cask catalog: %w", err)
+	var wg sync.WaitGroup
+	var failOnce sync.Once
+	var fetchErr error
+	fetch := func(name, url string, dst any) {
+		defer wg.Done()
+		if err := c.get(ctx, url, dst); err != nil {
+			failOnce.Do(func() {
+				// Record the cause before cancellation can fail the sibling.
+				fetchErr = fmt.Errorf("%s catalog: %w", name, err)
+				cancel()
+			})
+		}
+	}
+	wg.Add(2)
+	go fetch("formula", c.FormulaURL, &fs)
+	go fetch("cask", c.CaskURL, &cs)
+	wg.Wait()
+	if fetchErr != nil {
+		return Result{}, fetchErr
 	}
 	fp, fskip := normalizeFormulae(fs)
 	cp, cskip := normalizeCasks(cs)
