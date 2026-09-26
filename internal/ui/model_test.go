@@ -49,6 +49,40 @@ func commandIsQuit(t *testing.T, cmd tea.Cmd) bool {
 	return ok
 }
 
+func TestInitialIndexingElapsedAndPhaseRemainVisibleAndStopOnCompletion(t *testing.T) {
+	startedAt := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	ch := make(chan RefreshEvent)
+	m := New(nil, true, false, true, Dependencies{Refresh: func() <-chan RefreshEvent { return ch }})
+	m.now = func() time.Time { return startedAt }
+	m = update(t, m, tea.WindowSizeMsg{Width: 50, Height: 12})
+	// Trigger the refresh directly rather than waiting for the startup frame.
+	m.refreshing = false
+	m.pendingRefresh = false
+	m, cmd := updateWithCmd(t, m, startRefreshMsg{})
+	if cmd == nil || !strings.Contains(m.View(), "elapsed 00:00") {
+		t.Fatalf("bootstrap elapsed missing: %q", m.View())
+	}
+	m.now = func() time.Time { return startedAt.Add(7 * time.Second) }
+	m = update(t, m, indexTickMsg{RunID: m.indexRunID})
+	if got := m.View(); !strings.Contains(got, "elapsed 00:07") {
+		t.Fatalf("elapsed did not advance: %q", got)
+	}
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Progress: &refresh.Progress{
+		Phase: refresh.PhaseHistory, Detail: "scanning complete history",
+	}}})
+	if got := m.View(); !strings.Contains(got, "indexing history") || !strings.Contains(got, "scanning complete history") {
+		t.Fatalf("history stage is not visible in narrow bootstrap view: %q", got)
+	}
+	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Done: true, Err: errors.New("canceled")}})
+	if m.Refreshing() || m.indexingElapsed() != 0 {
+		t.Fatal("completed refresh retained active elapsed time")
+	}
+	_, staleCmd := updateWithCmd(t, m, indexTickMsg{RunID: m.indexRunID})
+	if staleCmd != nil {
+		t.Fatal("stale timer scheduled another tick after completion")
+	}
+}
+
 func TestDefaultRangeMovementAndRangeKeys(t *testing.T) {
 	m := New(uiPkgs(), false, false, true, Dependencies{})
 	if m.Range() != domain.Range30D || m.KindFilter() != domain.KindFilterAll || len(m.Visible()) != 4 {

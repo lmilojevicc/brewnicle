@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/milo/brewnicle/internal/domain"
+	"github.com/milo/brewnicle/internal/refresh"
 )
 
 type State int
@@ -63,6 +64,9 @@ type Model struct {
 	refreshing          bool
 	refreshCh           <-chan RefreshEvent
 	progress            string
+	progressPhase       refresh.Phase
+	indexStartedAt      time.Time
+	indexRunID          uint64
 	status              string
 	statusLevel         statusLevel
 	dates               DateAvailability
@@ -187,3 +191,14 @@ func (m Model) Stale() bool                   { return m.stale }
 func (m Model) Dates() DateAvailability       { return m.dates }
 func (m Model) State() State                  { return m.state }
 func (m Model) Visible() []domain.Package     { return append([]domain.Package(nil), m.visible...) }
+
+func (m Model) indexingElapsed() time.Duration {
+	if !m.refreshing || m.indexStartedAt.IsZero() {
+		return 0
+	}
+	elapsed := m.now().Sub(m.indexStartedAt)
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed
+}

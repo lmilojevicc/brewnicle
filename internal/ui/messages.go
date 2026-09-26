@@ -18,6 +18,7 @@ type RefreshStarter func() <-chan RefreshEvent
 
 type startupFrameMsg struct{}
 type startRefreshMsg struct{}
+type indexTickMsg struct{ RunID uint64 }
 type refreshEventMsg struct{ Event RefreshEvent }
 type ActionResultMsg struct {
 	Action string

@@ -11,10 +11,17 @@ import (
 	"github.com/milo/brewnicle/internal/platform"
 )
 
-const startupRenderDelay = 50 * time.Millisecond
+const (
+	startupRenderDelay = 50 * time.Millisecond
+	indexTickInterval  = time.Second
+)
 
 func waitStartupFrame() tea.Cmd {
 	return tea.Tick(startupRenderDelay, func(time.Time) tea.Msg { return startupFrameMsg{} })
+}
+
+func waitIndexTick(runID uint64) tea.Cmd {
+	return tea.Tick(indexTickInterval, func(time.Time) tea.Msg { return indexTickMsg{RunID: runID} })
 }
 
 func waitRefresh(ch <-chan RefreshEvent) tea.Cmd {
@@ -54,12 +61,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshing = true
 		m.pendingRefresh = false
 		m.progress = "starting refresh"
+		m.progressPhase = ""
+		m.indexRunID++
+		m.indexStartedAt = time.Time{}
+		var tick tea.Cmd
 		if m.dates == DatesUnavailable {
 			m.dates = DatesIndexing
 			m.setStatus("Retrying exact package date indexing", statusWarning)
 		}
+		if m.dates == DatesIndexing {
+			m.indexStartedAt = m.now()
+			tick = waitIndexTick(m.indexRunID)
+		}
 		m.refreshCh = m.deps.Refresh()
-		return m, waitRefresh(m.refreshCh)
+		return m, tea.Batch(waitRefresh(m.refreshCh), tick)
+	case indexTickMsg:
+		if !m.refreshing || x.RunID != m.indexRunID || m.dates != DatesIndexing {
+			return m, nil
+		}
+		return m, waitIndexTick(x.RunID)
 	case refreshEventMsg:
 		return m.updateRefreshEvent(x.Event)
 	case ActionResultMsg:
@@ -220,6 +240,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 	if e.Progress != nil {
 		m.progress = e.Progress.Detail
+		m.progressPhase = e.Progress.Phase
 	}
 	if e.SnapshotReady {
 		key := ""
@@ -262,7 +283,9 @@ func (m Model) updateRefreshEvent(e RefreshEvent) (tea.Model, tea.Cmd) {
 		return m, waitRefresh(m.refreshCh)
 	}
 	m.refreshing = false
+	m.indexStartedAt = time.Time{}
 	m.progress = ""
+	m.progressPhase = ""
 	if e.Err != nil {
 		if len(m.packages) == 0 {
 			m.state = StateFatal

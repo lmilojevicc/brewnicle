@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/milo/brewnicle/internal/domain"
+	"github.com/milo/brewnicle/internal/refresh"
 )
 
 const (
@@ -439,6 +441,9 @@ func (m Model) footerLines() []string {
 	if m.status != "" {
 		partText = append([]string{s.status(m.statusLevel).Render(m.status)}, hints...)
 	}
+	if m.refreshing && m.dates == DatesIndexing {
+		partText = append([]string{s.accent.Render(m.indexingLabel())}, partText...)
+	}
 	// The wide footer is indented under the body panels; that indent comes out
 	// of the join budget so the last hint is never clipped.
 	indent := ""
@@ -482,6 +487,9 @@ func (m Model) bootstrapView() string {
 		detail = "Preparing package history. First run may require significant network, time, and disk."
 	}
 	content := []string{s.title.Render("building first index"), ""}
+	if m.refreshing {
+		content = append(content, s.accent.Render(m.indexingLabel()))
+	}
 	for _, line := range wrap(detail, inner) {
 		content = append(content, s.warning.Render(line))
 	}
@@ -493,6 +501,36 @@ func (m Model) bootstrapView() string {
 	}
 	content = append(content, "", s.muted.Render("This uses official Homebrew API catalogs and Git history."), s.muted.Render("q quit"))
 	return m.panelView("brewnicle", content)
+}
+
+func (m Model) indexingLabel() string {
+	stage := "indexing"
+	switch m.progressPhase {
+	case refresh.PhaseLock:
+		stage = "waiting for refresh lock"
+	case refresh.PhaseCatalog:
+		stage = "fetching catalogs"
+	case refresh.PhaseCatalogReady:
+		stage = "catalog ready · indexing history"
+	case refresh.PhaseHistory:
+		stage = "indexing history"
+	case refresh.PhasePublish:
+		stage = "publishing index"
+	case refresh.PhaseSnapshotReady:
+		stage = "using published index"
+	}
+	return fmt.Sprintf("%s · elapsed %s", stage, formatElapsed(m.indexingElapsed()))
+}
+
+func formatElapsed(elapsed time.Duration) string {
+	seconds := int(elapsed.Round(time.Second) / time.Second)
+	if seconds < 0 {
+		seconds = 0
+	}
+	if hours := seconds / 3600; hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, seconds/60%60, seconds%60)
+	}
+	return fmt.Sprintf("%02d:%02d", seconds/60, seconds%60)
 }
 
 func (m Model) fatalView() string {
