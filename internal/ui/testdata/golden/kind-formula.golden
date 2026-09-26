@@ -1,16 +1,16 @@
-brewnicle  7d [30d] 90d 1y all  type:formula  1/2
-› ripgrep                      formula │ ripgrep  [formula]
-                                       │ 2026-07-27 · 10 days ago
-                                       │
-                                       │ Fast line-oriented search tool that recursively searches
-                                       │ directories.
-                                       │
-                                       │ Homepage: https://github.com/BurntSushi/ripgrep
-                                       │ Install: brew install ripgrep
-                                       │
-                                       │
-                                       │
-                                       │
-                                       │
-                                       │
-↑/↓ move  f type  / search  o homepage  i install  r refresh  ? help  q quit
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│brewnicle   7d   [30d]   90d   1y   all   type:formula                                         1/2│
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ packages ───────────────────────────────────────────╮ ╭─ ripgrep ───────────────────────────────╮
+│› ripgrep       formula  10d  Fast line-oriented sear…│ │ripgrep  [formula]                       │
+│                                                      │ │2026-07-27 · 10 days ago                 │
+│                                                      │ │                                         │
+│                                                      │ │Fast line-oriented search tool that      │
+│                                                      │ │recursively searches directories.        │
+│                                                      │ │                                         │
+│                                                      │ │homepage   https://github.com/BurntSushi…│
+│                                                      │ │install    brew install ripgrep          │
+│                                                      │ │                                         │
+│                                                      │ │                                         │
+╰──────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────╯
+  ↑/↓ move  f type  / search  o homepage  i install  r refresh  ? help  q quit

@@ -286,7 +286,7 @@ func TestHomepageInstallAvailabilityAndCompletion(t *testing.T) {
 		t.Fatal("homepage action unavailable")
 	}
 	unavailable = update(t, unavailable, runeKey("i"))
-	if unavailable.State() == StateConfirm || unavailable.statusLevel != statusWarning || !strings.Contains(unavailable.View(), "Homebrew is unavailable") || !strings.Contains(unavailable.View(), "Install: Unavailable") {
+	if unavailable.State() == StateConfirm || unavailable.statusLevel != statusWarning || !strings.Contains(unavailable.View(), "Homebrew is unavailable") || !strings.Contains(unavailable.View(), "install    Unavailable") {
 		t.Fatal(unavailable.View())
 	}
 

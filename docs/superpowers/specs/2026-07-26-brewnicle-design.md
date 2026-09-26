@@ -93,7 +93,7 @@ Search is a case-insensitive substring match over package name and description. 
 
 ### 5.1 Main layout
 
-The selected wide-terminal design is a split pane.
+The selected wide-terminal design frames its content in bordered panels.
 
 **Header**
 
@@ -107,18 +107,20 @@ The selected wide-terminal design is a split pane.
 **Left pane**
 
 - scrollable package list from the current non-disabled index;
-- package name and compact `formula`, `cask`, or `font` badge;
+- package name and compact `formula`, `cask`, or `font` badge. The name column sizes itself to the widest name in the current filtered result set (floored at twelve cells) and is not truncated to a narrower column; the description column absorbs that cost, shrinking and then dropping before any name is cut. Only when a single name is wider than the pane content minus two cells does the row fall back to the name alone and truncate it;
+- a three-cell compact age: `Nd` under 100 days, `Nmo` through nine months, and `Ny` from ten months on, or `?` when the date is unknown. The year branch is capped at `99y`, so no age value exceeds three cells;
+- a description column when at least ten cells remain after the marker, name column, kind badge, and age (the two-cell gap before it plus at least eight description cells), truncated to that remainder minus two cells; otherwise the row is kind plus age, then kind alone, then marker plus name alone;
 - newest-first ordering defined in section 4.4;
 - selection retained across filter changes when the selected record remains visible, otherwise moved to the first visible record;
 - the selected row vertically centered when possible, using the actual list capacity after header/footer layout. Odd capacities use the exact middle; even capacities use the lower middle. The first and last pages clamp to a full page without blank padding.
 
 **Right pane**
 
-- package name and kind;
+- package name and kind. The name is never truncated; the `  [<kind>]` suffix is kept only when it fits, and a name wider than the pane wraps onto continuation lines;
 - exact upstream addition date and relative age, or `Date unknown`;
 - wrapped description;
-- homepage URL;
-- exact install command;
+- homepage URL under an eleven-cell `homepage` label, wrapped to the remaining field width; a single unbreakable URL token that does not fit is truncated with an ellipsis, unlike the install value below, which is split across lines without truncation;
+- exact install command under an eleven-cell `install` label, wrapped to the remaining field width with continuation lines indented by the label;
 - install availability and the latest action result.
 
 **Footer**
@@ -181,13 +183,14 @@ These breakpoint values belong to the UI package as named constants and are fixe
 
 ### 5.7 Terminal-native styling
 
-Brewnicle uses a vivid theme made exclusively from terminal ANSI palette slots `1` through `8`; the user's terminal theme controls the actual RGB values. The application never uses RGB, ANSI-256, adaptive colors, or an explicit background.
+Brewnicle's semantic colours come exclusively from terminal ANSI palette slots `1` through `8`; the user's terminal theme controls the actual RGB values. Panel borders use exactly one neutral grey from the ANSI-256 ramp (`240`) so the chrome recedes; this is the only non-palette foreground. The application never uses RGB, adaptive colors, or an explicit background.
 
 - Title and selected package/detail names use magenta (`5`).
 - Active range, search focus, links, and homepage roles use cyan (`6`). The active range is also bold, underlined, and bracketed.
 - Formula, cask, and font labels use blue (`4`), magenta (`5`), and yellow (`3`) respectively.
 - Success uses green (`2`); warnings, stale state, and install prompts use yellow (`3`); errors use red (`1`); secondary/help text uses bright black (`8`).
 - The selected row uses cyan foreground plus reverse video and a visible `›` marker, producing a palette-driven selection without painting a background directly.
+- Panel box-drawing lines use the neutral grey `240`. No other ANSI-256 color is permitted.
 - `NO_COLOR` removes every foreground/background color while preserving bold, underline, reverse video, brackets, labels, and markers, so no state depends on color alone.
 
 ## 6. Architecture
@@ -474,7 +477,7 @@ A separately named opt-in integration test may validate catalog compatibility an
 5. Unknown-date packages appear in time range `all` and in no bounded range.
 6. Package type, time range, and `/` name/description search combine with logical AND; active filters survive refresh and responsive state changes.
 7. Wide terminals show the approved split pane; narrow terminals provide list/detail toggling; undersized terminals do not corrupt rendering. The selected list row is centered when possible using the lower middle for even capacities and full-page clamping at boundaries.
-8. The UI uses only the approved terminal ANSI `1`–`8` role mapping, sets no explicit background, RGB, ANSI-256, or adaptive colors, uses redundant attribute/text cues including reverse video for selection, and removes every color while remaining understandable under `NO_COLOR`.
+8. The UI uses the approved terminal ANSI `1`–`8` role mapping plus only the documented neutral `240` border grey, sets no explicit background, RGB, adaptive colors, or other ANSI-256 colors, uses redundant attribute/text cues including reverse video for selection, and removes every color while remaining understandable under `NO_COLOR`.
 9. `o` opens only validated HTTP(S) homepages through the correct OS command without a shell. Missing or invalid homepages retain the package with an empty value and `o` disabled.
 10. `i` shows the exact install command and runs nothing unless confirmed. Confirmed formula installs use `brew install <name>`; cask/font installs use `brew install --cask <token>` with attached stdio, and the TUI resumes afterward.
 11. A valid cached index renders before refresh. If it is at least 24 hours stale or has a missing, invalid, or older history-layout version when the process starts, refresh begins once in the background; no later timer is scheduled in a long-running process. `r` forces refresh, and only one refresh runs at once.

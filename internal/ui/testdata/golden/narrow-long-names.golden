@@ -1,11 +1,11 @@
 ╭──────────────────────────────────────────────────────────╮
-│brewnicle   7d   [30d]   90d   1y   all   type:all     2/2│
+│brewnicle   7d   30d   90d   1y   [all]   type:all     4/4│
 ╰──────────────────────────────────────────────────────────╯
 ╭─ packages ───────────────────────────────────────────────╮
-│› font-maple    font     10d  Rounded monospace programmi…│
-│  ripgrep       formula  10d  Fast line-oriented search t…│
-│                                                          │
-│                                                          │
+│› kubernetes-cli                 cask     3d   CLI        │
+│  font-jetbrains-mono-nerd-font  font     4mo  Nerd Font …│
+│  mongodb-community              formula  1y   Document-o…│
+│  terraform                      formula  ?    Infrastruc…│
 │                                                          │
 │                                                          │
 │                                                          │

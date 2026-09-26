@@ -1,12 +1,12 @@
-brewnicle  type:all  Search:                     …
-2/2  STALE  refreshing
-› font-maple                              font
-  ripgrep                                 formula
-
-
-
-
-
-
-
+╭────────────────────────────────────────────────╮
+│brewnicle   type:all   Search:                  │
+│2/2  STALE  refreshing                          │
+╰────────────────────────────────────────────────╯
+╭─ packages ─────────────────────────────────────╮
+│› font-maple    font     10d  Rounded monospace…│
+│  ripgrep       formula  10d  Fast line-oriente…│
+│                                                │
+│                                                │
+│                                                │
+╰────────────────────────────────────────────────╯
 type to filter  enter apply  esc keep query

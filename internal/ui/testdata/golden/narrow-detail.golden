@@ -1,15 +1,15 @@
-brewnicle  7d [30d] 90d 1y all  type:all  2/2
-font-maple  [font]
-2026-07-27 · 10 days ago
-
-Rounded monospace programming font
-
-Homepage: Unavailable
-Install: brew install --cask font-maple
-
-
-
-
-
-
+╭──────────────────────────────────────────────────────────╮
+│brewnicle   7d   [30d]   90d   1y   all   type:all     2/2│
+╰──────────────────────────────────────────────────────────╯
+╭─ font-maple ─────────────────────────────────────────────╮
+│font-maple  [font]                                        │
+│2026-07-27 · 10 days ago                                  │
+│                                                          │
+│Rounded monospace programming font                        │
+│                                                          │
+│homepage   Unavailable                                    │
+│install    brew install --cask font-maple                 │
+│                                                          │
+│                                                          │
+╰──────────────────────────────────────────────────────────╯
 enter back  ↑/↓ move  f type  / search  q quit  i install

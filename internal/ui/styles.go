@@ -10,7 +10,13 @@ type styles struct {
 	formula, cask, font        lipgloss.Style
 	success, warning, danger   lipgloss.Style
 	muted, link, installPrompt lipgloss.Style
+	border                     lipgloss.Style
 }
+
+// borderNeutral is the single neutral box-drawing colour from the ANSI-256
+// ramp. It carries no semantic meaning and is the only non ANSI-1..8
+// foreground the theme uses.
+const borderNeutral = "240"
 
 func makeStyles(noColor bool) styles {
 	s := styles{
@@ -38,6 +44,7 @@ func makeStyles(noColor bool) styles {
 		muted:         lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
 		link:          lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
 		installPrompt: s.installPrompt.Foreground(lipgloss.Color("3")),
+		border:        lipgloss.NewStyle().Foreground(lipgloss.Color(borderNeutral)),
 	}
 }
 

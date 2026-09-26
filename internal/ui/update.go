@@ -31,7 +31,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch x := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = x.Width, x.Height
-		m.input.Width = searchInputWidth(m.width)
+		m.input.Width = m.searchInputWidth()
 		if isWideLayout(m.width, m.height) && m.state == StateNarrowDetail {
 			m.state = StateBrowse
 		}

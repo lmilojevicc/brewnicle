@@ -1,0 +1,24 @@
+╭────────────────────────────────────────────────────────────────────────────────────────╮
+│brewnicle   7d   30d   90d   1y   [all]   type:all                                 18/18│
+╰────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ packages ─────────────────────────────────────╮ ╭─ font-maple ────────────────────────╮
+│› font-maple    font     10d  Rounded monospace…│ │font-maple  [font]                   │
+│  ripgrep       formula  10d  Fast line-oriente…│ │2026-07-27 · 10 days ago             │
+│  k9s           cask     13d  Kubernetes CLI to…│ │                                     │
+│  neovim        formula  14d  Vim-fork focused …│ │Rounded monospace programming font   │
+│  font-hack     font     16d  Typeface designed…│ │                                     │
+│  bat           formula  17d  Cat clone with sy…│ │homepage   Unavailable               │
+│  lazygit       formula  19d  Simple terminal U…│ │install    brew install --cask       │
+│  zed           cask     22d  High-performance …│ │           font-maple                │
+│  fd            formula  25d  Simple, fast and …│ │                                     │
+│  jq            formula  32d  Lightweight and f…│ │                                     │
+│  htop          formula  34d  Interactive proce…│ │                                     │
+│  tree          formula  36d  Display directori…│ │                                     │
+│  wget          formula  38d  Get a file from t…│ │                                     │
+│  curl          formula  41d  Internet file tra…│ │                                     │
+│  tmux          formula  44d  Terminal multiple…│ │                                     │
+│  fzf           formula  47d  Command-line fuzz…│ │                                     │
+│  zoxide        formula  51d  Smarter cd command│ │                                     │
+│  delta         formula  55d  Syntax-highlighti…│ │                                     │
+╰────────────────────────────────────────────────╯ ╰─────────────────────────────────────╯
+  ↑/↓ move  f type  / search  o homepage  i install  r refresh  ? help  q quit

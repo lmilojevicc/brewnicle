@@ -1,0 +1,24 @@
+╭────────────────────────────────────────────────────────────────────────────────────────╮
+│brewnicle   7d   30d   90d   1y   [all]   type:all                                   4/4│
+╰────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ packages ─────────────────────────────────────╮ ╭─ font-jetbrains-mono-nerd-font ─────╮
+│  kubernetes-cli                 cask     3d    │ │font-jetbrains-mono-nerd-font  [font]│
+│› font-jetbrains-mono-nerd-font  font     4mo   │ │2026-04-08 · 120 days ago            │
+│  mongodb-community              formula  1y    │ │                                     │
+│  terraform                      formula  ?     │ │Nerd Font patched JetBrains Mono     │
+│                                                │ │                                     │
+│                                                │ │homepage   Unavailable               │
+│                                                │ │install    brew install --cask       │
+│                                                │ │           font-jetbrains-mono-nerd-f│
+│                                                │ │           ont                       │
+│                                                │ │                                     │
+│                                                │ │                                     │
+│                                                │ │                                     │
+│                                                │ │                                     │
+│                                                │ │                                     │
+│                                                │ │                                     │
+│                                                │ │                                     │
+│                                                │ │                                     │
+│                                                │ │                                     │
+╰────────────────────────────────────────────────╯ ╰─────────────────────────────────────╯
+  ↑/↓ move  f type  / search  o homepage  i install  r refresh  ? help  q quit

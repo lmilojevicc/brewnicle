@@ -1,12 +1,12 @@
-brewnicle  7d [30d] 90d 1y all  type:all  2/2
-› font-maple                              font
-  ripgrep                                 formula
-
-
-
-
-
-
-
-
+╭────────────────────────────────────────────────╮
+│brewnicle   7d   [30d]   90d   type:all      2/2│
+╰────────────────────────────────────────────────╯
+╭─ packages ─────────────────────────────────────╮
+│› font-maple    font     10d  Rounded monospace…│
+│  ripgrep       formula  10d  Fast line-oriente…│
+│                                                │
+│                                                │
+│                                                │
+│                                                │
+╰────────────────────────────────────────────────╯
 enter details  ↑/↓ move  f type  / search  q quit

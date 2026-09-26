@@ -1,0 +1,8 @@
+╭─ install ──────────────────────────────────────╮
+│Confirm installation                            │
+│                                                │
+│brew install --cask                             │
+│font-jetbrains-mono-nerd-font                   │
+│                                                │
+│Enter/y install  Esc/n cancel                   │
+╰────────────────────────────────────────────────╯

@@ -45,6 +45,36 @@ func TestGoldenViews(t *testing.T) {
 	kindFormula := base(100, 16)
 	kindFormula = update(t, kindFormula, runeKey("f"))
 	cases["kind-formula"] = kindFormula
+
+	edge := edgePackages(now)
+	edgeBase := func(w, h int) Model {
+		m := New(edge, false, false, true, available)
+		m.now = func() time.Time { return now }
+		m.rangeValue = domain.RangeAll
+		m.applyFilter("")
+		return update(t, m, tea.WindowSizeMsg{Width: w, Height: h})
+	}
+	cases["wide-long-names"] = edgeBase(120, 24)
+	cases["narrow-long-names"] = edgeBase(60, 15)
+	edgeLongCask := edgeBase(90, 24)
+	edgeLongCask.selected = 1
+	cases["wide-long-cask-detail"] = edgeLongCask
+	confirmLong := New([]domain.Package{{Name: "font-jetbrains-mono-nerd-font", Kind: domain.KindFont, InstallTarget: "font-jetbrains-mono-nerd-font", AddedAt: &added}}, false, false, true, available)
+	confirmLong.now = func() time.Time { return now }
+	confirmLong.applyFilter("")
+	confirmLong = update(t, confirmLong, tea.WindowSizeMsg{Width: 50, Height: 12})
+	confirmLong = update(t, confirmLong, runeKey("i"))
+	cases["confirm-wide-command"] = confirmLong
+
+	rich := richWidePackages(now)
+	richBase := func() Model {
+		m := New(rich, false, false, true, available)
+		m.now = func() time.Time { return now }
+		m.rangeValue = domain.RangeAll
+		m.applyFilter("")
+		return update(t, m, tea.WindowSizeMsg{Width: 90, Height: 24})
+	}
+	cases["wide-rich"] = richBase()
 	search := base(100, 16)
 	search = update(t, search, runeKey("/"))
 	cases["search"] = search
@@ -93,6 +123,73 @@ func TestGoldenViews(t *testing.T) {
 	}
 }
 
+// richWidePackages mirrors the approved wide mockup fixture: enough packages
+// to fill an eighteen-row list with rich rows across every package kind.
+func richWidePackages(now time.Time) []domain.Package {
+	specs := []struct {
+		name string
+		kind domain.Kind
+		days int
+		desc string
+		home string
+	}{
+		{"font-maple", domain.KindFont, 10, "Rounded monospace programming font", ""},
+		{"ripgrep", domain.KindFormula, 10, "Fast line-oriented search tool that recursively searches directories.", "https://github.com/BurntSushi/ripgrep"},
+		{"k9s", domain.KindCask, 13, "Kubernetes CLI to manage your clusters in style", ""},
+		{"neovim", domain.KindFormula, 14, "Vim-fork focused on extensibility and usability", ""},
+		{"font-hack", domain.KindFont, 16, "Typeface designed for source code", ""},
+		{"bat", domain.KindFormula, 17, "Cat clone with syntax highlighting", ""},
+		{"lazygit", domain.KindFormula, 19, "Simple terminal UI for git commands", ""},
+		{"zed", domain.KindCask, 22, "High-performance multiplayer code editor", ""},
+		{"fd", domain.KindFormula, 25, "Simple, fast and user-friendly find alternative", ""},
+		{"jq", domain.KindFormula, 32, "Lightweight and flexible command-line JSON processor", ""},
+		{"htop", domain.KindFormula, 34, "Interactive process viewer", ""},
+		{"tree", domain.KindFormula, 36, "Display directories as trees", ""},
+		{"wget", domain.KindFormula, 38, "Get a file from the web", ""},
+		{"curl", domain.KindFormula, 41, "Internet file transfer tool", ""},
+		{"tmux", domain.KindFormula, 44, "Terminal multiplexer", ""},
+		{"fzf", domain.KindFormula, 47, "Command-line fuzzy finder", ""},
+		{"zoxide", domain.KindFormula, 51, "Smarter cd command", ""},
+		{"delta", domain.KindFormula, 55, "Syntax-highlighting pager for git", ""},
+	}
+	out := make([]domain.Package, len(specs))
+	for i, sp := range specs {
+		at := now.Add(-time.Duration(sp.days) * 24 * time.Hour)
+		out[i] = domain.Package{Name: sp.name, Kind: sp.kind, Description: sp.desc, Homepage: sp.home, InstallTarget: sp.name, AddedAt: &at}
+	}
+	return out
+}
+
+// edgePackages pins the row grammar's edges: names longer than twelve and
+// twenty cells, mo/y/? ages, and a short description that exercises the
+// padding inside the reverse-video selection band.
+func edgePackages(now time.Time) []domain.Package {
+	specs := []struct {
+		name  string
+		kind  domain.Kind
+		days  int
+		dated bool
+		desc  string
+	}{
+		{"kubernetes-cli", domain.KindCask, 3, true, "CLI"},
+		{"font-jetbrains-mono-nerd-font", domain.KindFont, 120, true, "Nerd Font patched JetBrains Mono"},
+		{"mongodb-community", domain.KindFormula, 400, true, "Document-oriented database"},
+		{"terraform", domain.KindFormula, 0, false, "Infrastructure as code"},
+	}
+	out := make([]domain.Package, len(specs))
+	for i, sp := range specs {
+		p := domain.Package{Name: sp.name, Kind: sp.kind, Description: sp.desc, InstallTarget: sp.name}
+		if sp.dated {
+			at := now.Add(-time.Duration(sp.days) * 24 * time.Hour)
+			p.AddedAt = &at
+		}
+		out[i] = p
+	}
+	return out
+}
+
+// richWidePackages mirrors the approved wide mockup fixture: enough packages
+// to fill an eighteen-row list with rich rows across every package kind.
 func normalizeGolden(view string) string {
 	lines := strings.Split(view, "\n")
 	for i := range lines {
