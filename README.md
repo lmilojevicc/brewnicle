@@ -1,92 +1,97 @@
-# Brewnicle
+# brewnicle
 
-Brewnicle is a Go/Charm terminal UI for discovering packages recently added to the official Homebrew catalog. It shows current installable formulae, casks, and font casks with descriptions and upstream first-add dates.
+A fast interactive terminal UI for discovering newly added official Homebrew packages with upstream first-add dates, full-text search, filtering, and installation.
 
-## What “added” means
+When you run `brew update`, Homebrew announces packages added since your last local update, but discards that history as soon as the terminal scrolls. Brewnicle pairs the official Homebrew formula and cask catalogs with upstream Git commit histories to provide a searchable chronicle of packages added over the last 7 days, 30 days, 90 days, 1 year, or all time.
 
-`brew update` advertises only the difference from the previous local update. Homebrew does not retain that advertisement history. Brewnicle instead combines the current non-disabled [formula](https://formulae.brew.sh/api/formula.json) and [cask](https://formulae.brew.sh/api/cask.json) catalogs with the earliest matching add commit reachable in the official `homebrew-core` and `homebrew-cask` Git histories.
+---
 
-Only current, non-disabled packages are listed. Removed packages and third-party taps are out of scope. The `all` view contains every enabled formula and cask returned by the current official catalogs, so its count changes as Homebrew changes. A font is a cask whose token starts with `font-`; it is shown once as `font` and installed with `--cask`. If a package’s earlier history cannot be resolved, its date is unknown and it appears only under `all`.
+## Features
 
-History scanning recognizes Homebrew's current strict package layouts, including `Formula/lib/<name>.rb` formulae and `Casks/font/font-<bucket>/<token>.rb` font casks, in addition to legacy and single-character bucket layouts. Live compatibility tests fail if enabled catalog entries move to an unsupported path family.
+- **Dual-Pane Bordered Layout:** Clean terminal UI featuring a boxed header, split list/detail body, and status footer. Automatically adapts to narrow terminals with an in-place details view.
+- **Instant Search:** Press `/` to filter packages interactively across names and descriptions.
+- **Time-Range Filtering:** Switch across `7d`, `30d`, `90d`, `1y`, or `all` using keys `1`–`5` or `Tab`.
+- **Package Kind Filtering:** Cycle between formulae, casks, and fonts (`f` / `F`).
+- **Catalog-First Browsing:** Search, inspect, and install packages immediately on first launch while exact upstream commit dates index in the background with live elapsed progress.
+- **Confirmed In-App Installation:** Review the exact install command in the detail pane and trigger installation with `i`. Installation requires explicit confirmation (`Enter` or `y`) and yields the terminal to Homebrew for interactive output.
+- **Homepage Opening:** Press `o` to launch the selected package's upstream homepage in your default browser.
+- **Offline SQLite Cache:** Stores package metadata and Git history timestamps locally, enabling instant launches and full offline browsing after bootstrap.
+- **ANSI Palette & NO_COLOR:** Uses your terminal's native ANSI colors for consistent theme integration. Fully respects the [`NO_COLOR`](https://no-color.org) standard.
 
-## First run and cache
+---
 
-The first run downloads both API catalogs and app-owned, blob-filter-requested Git history caches. As soon as the catalogs arrive, Brewnicle switches to a provisional `all` view so current packages can be searched, opened, and installed while exact first-add dates index in the background. Date-bounded ranges are disabled and dates are explicitly marked as indexing until that exact history pass finishes. If indexing fails, catalog browsing remains available and `r` retries it.
+## Prerequisites
 
-Homebrew’s histories are large: initialization can require substantial network transfer, disk space, and time even though source blobs are not requested. Git servers or clients may ignore filtering. Brewnicle reports phase-level progress and does not promise an exact size or duration. A completed full clone is validated and atomically checkpointed as `core.git.bootstrap` or `cask.git.bootstrap` before its CPU-intensive scan. If the app exits or scanning fails, the next run reuses that download instead of cloning it again. A pending clone is never treated as completed history and never publishes incomplete package rows or refs.
+- **macOS** or **Linux**
+- **Go >= 1.25.0** (if installing or compiling from source)
+- **Git** on `PATH` (used for background history indexing)
+- **Homebrew** on `PATH` (optional; required for package installation, while browsing and opening homepages work without it)
 
-The app never modifies Homebrew’s own taps. It stores an SQLite index and bare Git caches under the OS user-cache directory (`~/Library/Caches/brewnicle` on macOS, normally `$XDG_CACHE_HOME/brewnicle` or `~/.cache/brewnicle` on Linux). Provisional catalog rows stay in memory only. After both exact history scans validate, Brewnicle atomically publishes the complete SQLite generation and promotes the validated repositories. Later starts render the cached index immediately. At startup only, an index at least 24 hours old refreshes in the background; `r` forces refresh. A failed refresh leaves the prior index usable. The app can browse offline after a successful bootstrap.
+---
 
-Schema-v1 indexes remain visible while Brewnicle performs one final background CPU-intensive full-history scan to build its incremental history index; this reuses the existing Git caches rather than downloading the repositories again. Full scans and ranges use Git's full reachable-history traversal with combined merge diffs so merged side-branch and merge-resolution additions are retained without inventing merge timestamps. The SQLite generation then stores complete earliest-add aggregates plus the exact published core/cask commit cursors. Subsequent same-tip refreshes perform no history scan, and ordinary updates scan exactly the commits between the published cursor and the new official tip. A rewritten, missing, shallow, corrupt, or algorithm-incompatible repository falls back to a bounded full rebuild of only that repository.
+## Installation
 
-SQLite cursors are authoritative; Git fetched/published refs are repairable object pins. A cache-root file lock serializes refreshes from multiple Brewnicle processes. When another process owns it, the TUI reports that it is waiting and reloads the winning index after acquiring the lock. Failures before database rename preserve the prior generation; directory-sync, ref-reconciliation, or lock-release failures after rename are warnings because the new generation is already active. Legacy `candidate` and `last-good` refs may retain orphaned Git objects on disk after rewritten history until a later cleanup release. UI filters never change backend refresh scope.
+Install the latest binary using Go:
 
-## Keys
+```sh
+go install github.com/milo/brewnicle/cmd/brewnicle@latest
+```
 
-| Key | Action |
-|---|---|
-| `↑`/`↓`, `j`/`k` | move selection |
-| `1`…`5` | `7d`, `30d`, `90d`, `1y`, `all` |
-| `tab` / `shift+tab` | cycle ranges |
-| `f` / `F` | cycle package type forward/back: all, formula, cask, font |
-| `/` | search name and description |
-| `esc` | leave/clear search or close modal |
-| `o` | open selected homepage |
-| `i` | show install confirmation |
-| `r` | refresh |
-| `enter` | confirm; toggle details on narrow terminals |
-| `?` | help |
-| `q`, `ctrl+c` | quit when search or install confirmation is not active |
-
-Search and install confirmation own text keys, including `q` and `ctrl+c`; leave them with `esc`/`enter` or the displayed confirmation controls. The too-small screen keeps its explicit quit control. The default range is `30d` and the default package type is `all`. During first-run date indexing, the range is temporarily forced to `all`; date-bounded ranges become available when exact dates finish. Package type, time range, and search filters combine together. The selected package row stays vertically centered while browsing when possible; the first and last pages clamp without blank padding. If `brew` is unavailable, browsing and homepage actions remain usable while installation is visibly disabled. Installation never starts without confirmation. Formulae run `brew install NAME`; casks and fonts run `brew install --cask TOKEN`. Commands use direct argument vectors, never a shell. Bubble Tea yields the terminal to Homebrew for interactive output and restores the TUI afterward.
-
-Brewnicle frames the interface in bordered panels: a boxed header, a split list/detail body (or a single full-width panel on narrow terminals), and a one-line footer. List rows are rich rows — a `›` selection marker, the package name, a two-cell gap, a kind badge, a compact age (`10d`, `3mo`, `1y`, or `?`), and a description when the pane leaves room. The name column sizes itself to the widest name in the current result set, and the description column absorbs that cost, being shortened and then dropped before any name is cut; only when a single name is wider than the pane content minus two cells does the row fall back to the name alone and truncate it. The detail panel shows the wrapped description, the exact addition date, a `homepage` field, and the exact `install` command; the install command wraps onto continuation lines rather than being truncated, while a single unbreakable homepage URL that does not fit is truncated. On narrow terminals `enter` toggles between the list and the selected package's detail panel.
-
-Brewnicle's semantic colours come only from the terminal's ANSI palette, so the terminal theme controls the actual hues. Magenta marks titles and selected package names; cyan marks focus, active ranges, links, and the reverse-video selected row; formulae are blue, casks magenta, and fonts yellow; success is green, warnings are yellow, errors are red, and secondary help is bright black. Panel borders use one neutral grey from the ANSI-256 ramp (`240`) so the chrome recedes; this is the only non-palette colour. Brewnicle never uses RGB, adaptive colors, or a painted background. `NO_COLOR` removes every colour while preserving bold, underline, reverse video, brackets, labels, and the `›` marker.
-
-## Requirements and usage
-
-- macOS or Linux
-- Git for first bootstrap and refresh
-- Homebrew only for installation (browsing works without it)
+Or run directly from source:
 
 ```sh
 go run ./cmd/brewnicle
 ```
 
-## Development
+*(Note: `brewnicle` accepts no CLI flags.)*
 
-Go **1.25.0 or newer** is required.
+---
 
-```sh
-go mod tidy
-gofmt -w $(find cmd internal -name '*.go')
-go test ./...
-go test -race ./...
-go vet ./...
-go build -o /tmp/brewnicle ./cmd/brewnicle
-```
+## Keybindings
 
-Live compatibility tests are opt-in and never install packages or clone full histories:
+| Key | Action |
+| --- | --- |
+| `↑` / `k`, `↓` / `j` | Move selection up / down |
+| `1` – `5` | Select time range (`7d`, `30d`, `90d`, `1y`, `all`) |
+| `Tab` / `Shift+Tab` | Cycle time range forward / backward |
+| `f` / `F` | Cycle package type forward / backward (`all`, `formula`, `cask`, `font`) |
+| `/` | Search package name and description |
+| `Esc` | Clear search, dismiss modal, or exit help overlay |
+| `o` | Open package homepage in browser |
+| `i` | Open install confirmation modal |
+| `Enter` | Confirm install (in modal); toggle details on narrow terminals |
+| `y` / `n` | Confirm / cancel install in modal |
+| `r` | Refresh catalog and history cache (or retry if indexing failed) |
+| `?` | Toggle help overlay |
+| `q`, `Ctrl+C` | Quit (when search or confirmation modal is not active) |
 
-```sh
-go test -tags=integration ./internal/catalog ./internal/history
-```
+---
 
-### Isolated fixture smoke test
+## Environment & Caching
 
-This creates a fixture through the real store API in a temporary cache and launches the actual TUI without touching your normal cache or requiring network refresh:
+### Environment Variables
 
-```sh
-go build -o /tmp/brewnicle-smoke ./cmd/brewnicle
-TMP_HOME="$(mktemp -d)"
-HOME="$TMP_HOME" XDG_CACHE_HOME="$TMP_HOME/cache" \
-  BREWNICLE_SMOKE_CACHE="$TMP_HOME/cache/brewnicle" \
-  go test ./cmd/brewnicle -run '^TestWriteSmokeFixture$' -count=1
-HOME="$TMP_HOME" XDG_CACHE_HOME="$TMP_HOME/cache" /tmp/brewnicle-smoke
-```
+- `NO_COLOR`: When set to any value (per [no-color.org](https://no-color.org)), disables ANSI color styling while retaining text formatting, borders, and selection markers.
 
-Exercise wide (≥90×16), narrow (at least 50×12 but not wide, including wide-but-short terminals), and too-small views; search, ranges, package-type cycling, centered selection near the middle and boundaries; help; homepage-unavailable feedback; and install confirmation cancellation. Do not confirm a real install as part of validation.
+### Cache Directory
 
-Brewnicle intentionally has no hosted index, telemetry, dependency management, release automation, or package upgrade/uninstall features.
+Brewnicle stores its SQLite index (`index.db`), bare Git history caches (`git/`), and lockfiles (`refresh.lock`) under the OS user-cache directory:
+
+- **macOS:** `~/Library/Caches/brewnicle`
+- **Linux:** `$XDG_CACHE_HOME/brewnicle` (or `~/.cache/brewnicle` if unset)
+
+The cache root is validated against symbolic links and never modifies Homebrew's own taps or files.
+
+---
+
+## Intentional Boundaries
+
+- **Official Catalog Only:** Tracks official `homebrew-core` and `homebrew-cask` packages. Third-party taps and removed/deprecated packages are out of scope.
+- **Read-Only Catalog Browser:** Brewnicle is a discovery tool and does not manage local package updates, upgrades, uninstalls, or dependency trees.
+- **No Telemetry / No Daemon:** Brewnicle contains no telemetry, phones home to no third-party servers, and runs no background daemon.
+
+---
+
+## Development & Architecture
+
+For development workflows, build instructions, test suites (including unit, race, integration, and isolated fixture smoke tests), and deep architecture notes, see [docs/development.md](docs/development.md). Additional architectural specifications and design documents are located in [docs/](docs/).

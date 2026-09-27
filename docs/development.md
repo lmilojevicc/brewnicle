@@ -1,0 +1,143 @@
+# Brewnicle Developer Guide & Architecture
+
+This guide covers building, testing, internal architecture, and design specifications for Brewnicle.
+
+For the end-user overview, installation, and keybindings, see the [README](../README.md).
+
+---
+
+## 1. Prerequisites & Environment
+
+- **Go:** 1.25.0 or newer
+- **Git:** Required on `PATH` for history indexing and test fixtures
+- **Homebrew:** Optional; only needed to test live package installation (`brew install`)
+
+---
+
+## 2. Building & Code Hygiene
+
+Format and tidy the codebase:
+
+```sh
+go mod tidy
+gofmt -w $(find cmd internal -name '*.go')
+```
+
+Build the binary:
+
+```sh
+go build -o brewnicle ./cmd/brewnicle
+```
+
+---
+
+## 3. Testing Suites
+
+### 3.1 Unit Tests & Race Detector
+
+Run the standard test suite:
+
+```sh
+go test ./...
+```
+
+Run tests with the Go race detector enabled:
+
+```sh
+go test -race ./...
+```
+
+Run static analysis:
+
+```sh
+go vet ./...
+```
+
+### 3.2 Integration Tests
+
+Live compatibility tests verify client parsers against official Homebrew API responses and upstream repository path layouts. These are opt-in, run via build tags, and never install packages or clone full histories:
+
+```sh
+go test -tags=integration ./internal/catalog ./internal/history
+```
+
+### 3.3 Isolated Fixture Smoke Test
+
+To manually exercise the TUI across various terminal geometries without touching your personal cache or performing live network cloning, use the fixture smoke test helper:
+
+```sh
+# 1. Build a test binary
+go build -o /tmp/brewnicle-smoke ./cmd/brewnicle
+
+# 2. Generate a temporary environment with populated fixture data
+TMP_HOME="$(mktemp -d)"
+HOME="$TMP_HOME" XDG_CACHE_HOME="$TMP_HOME/cache" \
+  BREWNICLE_SMOKE_CACHE="$TMP_HOME/cache/brewnicle" \
+  go test ./cmd/brewnicle -run '^TestWriteSmokeFixture$' -count=1
+
+# 3. Launch the smoke binary against the isolated cache
+HOME="$TMP_HOME" XDG_CACHE_HOME="$TMP_HOME/cache" /tmp/brewnicle-smoke
+```
+
+#### Smoke Verification Checklist
+
+- **Wide Layout (≥ 90×16):** Split list/detail panes render side-by-side with clear borders.
+- **Narrow Layout (≥ 50×12, < 90×16):** Full-width list view; `Enter` toggles into the detail pane and back.
+- **Terminal Too Small (< 50×12):** Displays a minimal "Terminal too small" notice; `q` quits.
+- **Interactive Navigation:** Centered list selection with boundary clamping (`j`/`k`, `↑`/`↓`).
+- **Filtering & Search:** Real-time search (`/`), range cycling (`1`–`5`, `Tab`), and kind filtering (`f`/`F`).
+- **Help Overlay:** Toggle help panel (`?`), dismiss with `?` or `Esc`.
+- **Install Confirmation:** Press `i` to open the confirmation modal; test cancel (`Esc` or `n`). *(Do not confirm real installs during automated testing.)*
+
+---
+
+## 4. Architecture & Deep Internals
+
+### 4.1 Upstream Homebrew Mechanics & Catalog Joining
+
+Homebrew's `brew update` compares newline-delimited snapshots (e.g. `formula_names.before.txt` vs. `formula_names.txt`) to print new formula and cask announcements. Homebrew retains only the delta from the immediate previous local update; it maintains no historical database of when packages were first introduced.
+
+Brewnicle synthesizes this missing timeline:
+1. **Catalog Authority:** Official Homebrew JSON APIs (`formula.json` and `cask.json`) define the complete set of current, enabled packages. Disabled packages (`disabled: true`) and removed packages are excluded from the browsing view.
+2. **Date Resolution:** Upstream Git repositories (`homebrew-core` and `homebrew-cask`) are traversed to locate the earliest reachable commit that introduced the package (or any of its documented former names/tokens). The earliest committer timestamp in UTC becomes `added_at`.
+3. **Catalog-First Bootstrap:** On first launch, the lightweight JSON catalogs download first (~a few MB). Brewnicle immediately enters an active `all` browsing view so users can search, open, and install packages while the CPU- and transfer-intensive Git history indexing proceeds in the background with live elapsed progress.
+
+### 4.2 Git History Cache Mechanics
+
+The Git history cache resides in `$CACHE_ROOT/git/`:
+- **Blob-Filtered Clones:** Git caches use bare repositories cloned with `--filter=blob:none`. This downloads commit objects and trees while excluding file source blobs, saving gigabytes of bandwidth and disk space.
+- **Atomic Bootstrap Checkpoints:** Completed full clones are validated and atomically checkpointed as `core.git.bootstrap` or `cask.git.bootstrap` before CPU-intensive commit scanning begins. If the scan is interrupted or fails, subsequent runs reuse the checkpointed clone rather than re-downloading.
+- **Full Reachable-History Traversal:** Full scans traverse Git reachable history with combined merge diffs (`-m`), preserving merge-resolution additions and side-branch merges without synthesizing artificial merge timestamps.
+- **Incremental Refresh:** Brewnicle stores the published commit tip cursors (`core_cursor`, `cask_cursor`) alongside earliest-add event aggregates in SQLite. Subsequent refreshes only scan commits between `published_cursor..new_tip`. If tips are unchanged, no Git history scan is run.
+- **Force-Push & Non-Ancestor Recovery:** If upstream history is rewritten or non-ancestral, Brewnicle detects the cursor mismatch and performs a bounded full rebuild of only that repository.
+
+### 4.3 SQLite Schema & Atomic Publication
+
+The local cache database (`index.db`) uses SQLite in WAL mode:
+- **Schema Migrations:** The schema tracks package metadata, earliest addition timestamps, and commit cursors. Schema upgrades (such as migrating from schema-v1 to incremental cursors) occur transparently in the background.
+- **Out-of-Place Publication:** The active database is never modified in place during refresh. A complete sibling temporary database (`index.db.tmp.*`) is generated, populated, checked, synced to disk, and atomically renamed over `index.db`.
+- **Authoritative Cursors vs. Repairable Pins:** The published SQLite database is the source of truth for cursors and events. Git ref updates and directory syncs occur after atomic database replacement; post-rename ref or sync errors are treated as non-fatal warnings.
+
+### 4.4 Process Synchronization & Lock Contention
+
+To ensure consistency when multiple Brewnicle processes run concurrently:
+- A file lock (`refresh.lock`) serializes catalog downloads, Git fetches, and index publications.
+- If another process holds the lock during startup or manual refresh, the TUI displays a waiting indicator: `"Waiting for another Brewnicle process to finish refreshing"`.
+- Upon acquiring the lock, Brewnicle checks whether the other process already published a fresh index snapshot. If so, it reloads the new index immediately without re-running the refresh pass.
+
+### 4.5 Cache Boundaries & Symlink Containment
+
+Cache directory resolution (`internal/refresh/paths.go`):
+- Canonicalizes cache paths using `filepath.EvalSymlinks`.
+- Verifies that neither the cache directory nor its parent directory is a symbolic link.
+- Git cache operations strictly validate paths before execution to prevent directory traversal or symlink redirection attacks.
+
+---
+
+## 5. Specifications & Implementation Plans
+
+For deeper design rationales and architectural decisions, refer to the following documents in `docs/`:
+
+- [Design Specification](superpowers/specs/2026-07-26-brewnicle-design.md) — Comprehensive design specification, package semantics, color palette rules, and user interaction flow.
+- [Incremental History Refresh Implementation Plan](superpowers/plans/2026-08-09-incremental-history-refresh.md) — Technical plan for incremental commit scanning, cursors, and schema migration.
+- [Initial Implementation Plan](superpowers/plans/2026-08-06-brewnicle-implementation.md) — Original baseline implementation plan and module contracts.
