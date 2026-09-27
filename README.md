@@ -2,6 +2,8 @@
 
 A fast interactive terminal UI for discovering newly added official Homebrew packages with upstream first-add dates, full-text search, filtering, and installation.
 
+![Brewnicle terminal interface showing package list, details, and status](assets/cover-image.png)
+
 When you run `brew update`, Homebrew announces packages added since your last local update, but discards that history as soon as the terminal scrolls. Brewnicle pairs the official Homebrew formula and cask catalogs with upstream Git commit histories to provide a searchable chronicle of packages added over the last 7 days, 30 days, 90 days, 1 year, or all time.
 
 ---
