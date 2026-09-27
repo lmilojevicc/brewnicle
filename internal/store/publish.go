@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/milo/brewnicle/internal/domain"
-	"github.com/milo/brewnicle/internal/history"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/history"
 )
 
 type publishStage string

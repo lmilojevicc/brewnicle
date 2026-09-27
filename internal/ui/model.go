@@ -6,8 +6,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/milo/brewnicle/internal/domain"
-	"github.com/milo/brewnicle/internal/refresh"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/refresh"
 )
 
 type State int

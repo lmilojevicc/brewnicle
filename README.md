@@ -42,16 +42,18 @@ When you run `brew update`, Homebrew announces packages added since your last lo
 
 ## Installation
 
-Install with Homebrew:
+Install the current development version with Homebrew:
 
 ```sh
-brew install lmilojevicc/tap/brewnicle
+brew install --HEAD lmilojevicc/tap/brewnicle
 ```
 
-Or install the binary using Go:
+The tap is HEAD-only until the first stable release is published and its formula is updated.
+
+Or install using Go:
 
 ```sh
-go install github.com/milo/brewnicle/cmd/brewnicle@latest
+go install github.com/lmilojevicc/brewnicle/cmd/brewnicle@latest
 ```
 
 Or run directly from source:
@@ -111,4 +113,6 @@ The cache root is validated against symbolic links and never modifies Homebrew's
 
 ## Development & Architecture
 
-For development workflows, build instructions, test suites (including unit, race, integration, and isolated fixture smoke tests), and deep architecture notes, see [docs/development.md](docs/development.md). Additional architectural specifications and design documents are located in [docs/](docs/).
+See the [development guide](docs/development.md) for building, testing, and architecture, and [Contributing](CONTRIBUTING.md) for contribution guidelines. Report vulnerabilities through the [security policy](SECURITY.md).
+
+Licensed under [MIT](LICENSE).

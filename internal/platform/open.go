@@ -3,7 +3,7 @@ package platform
 import (
 	"context"
 	"fmt"
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 	"net/url"
 	"os/exec"
 	"runtime"

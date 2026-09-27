@@ -1,6 +1,6 @@
 package refresh
 
-import "github.com/milo/brewnicle/internal/domain"
+import "github.com/lmilojevicc/brewnicle/internal/domain"
 
 type Phase string
 

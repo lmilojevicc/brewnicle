@@ -12,13 +12,13 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/milo/brewnicle/internal/catalog"
-	"github.com/milo/brewnicle/internal/domain"
-	"github.com/milo/brewnicle/internal/history"
-	"github.com/milo/brewnicle/internal/platform"
-	"github.com/milo/brewnicle/internal/refresh"
-	"github.com/milo/brewnicle/internal/store"
-	"github.com/milo/brewnicle/internal/ui"
+	"github.com/lmilojevicc/brewnicle/internal/catalog"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/history"
+	"github.com/lmilojevicc/brewnicle/internal/platform"
+	"github.com/lmilojevicc/brewnicle/internal/refresh"
+	"github.com/lmilojevicc/brewnicle/internal/store"
+	"github.com/lmilojevicc/brewnicle/internal/ui"
 )
 
 func main() {

@@ -11,11 +11,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/milo/brewnicle/internal/domain"
-	"github.com/milo/brewnicle/internal/history"
-	"github.com/milo/brewnicle/internal/refresh"
-	"github.com/milo/brewnicle/internal/store"
-	"github.com/milo/brewnicle/internal/ui"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/history"
+	"github.com/lmilojevicc/brewnicle/internal/refresh"
+	"github.com/lmilojevicc/brewnicle/internal/store"
+	"github.com/lmilojevicc/brewnicle/internal/ui"
 )
 
 func testHooks(now time.Time) applicationHooks {
@@ -159,7 +159,8 @@ func TestCorruptIndexPreservationFailureIsReturned(t *testing.T) {
 }
 
 func TestWinningIndexPublishedBeforeLockedPreservationRemainsActive(t *testing.T) {
-	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	// The UI filters against the wall clock, independently of the refresh hook.
+	now := time.Now().UTC()
 	root := filepath.Join(t.TempDir(), "cache")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)

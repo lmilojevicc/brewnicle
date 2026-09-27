@@ -4,7 +4,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/milo/brewnicle/internal/catalog"
+	"github.com/lmilojevicc/brewnicle/internal/catalog"
 )
 
 type RepoKind string

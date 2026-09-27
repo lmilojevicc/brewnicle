@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 )
 
 type Revision struct {

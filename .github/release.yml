@@ -1,0 +1,10 @@
+changelog:
+  categories:
+    - title: Fixes
+      labels: [bug]
+    - title: Improvements
+      labels: [enhancement]
+    - title: Dependencies
+      labels: [dependencies]
+    - title: Other changes
+      labels: ['*']

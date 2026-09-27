@@ -1,4 +1,4 @@
-module github.com/milo/brewnicle
+module github.com/lmilojevicc/brewnicle
 
 go 1.25.0
 

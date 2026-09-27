@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/milo/brewnicle/internal/catalog"
+	"github.com/lmilojevicc/brewnicle/internal/catalog"
 )
 
 const AlgorithmVersion = 1

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/milo/brewnicle/internal/domain"
-	"github.com/milo/brewnicle/internal/refresh"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/refresh"
 )
 
 const (

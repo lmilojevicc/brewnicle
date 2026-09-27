@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milo/brewnicle/internal/catalog"
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/catalog"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 )
 
 func TestLiveCatalogSourcePathsAreSupported(t *testing.T) {
