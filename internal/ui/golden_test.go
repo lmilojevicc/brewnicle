@@ -8,7 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 )
 
 func TestGoldenViews(t *testing.T) {

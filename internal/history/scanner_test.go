@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 )
 
 func TestResolveUsesFormerName(t *testing.T) {

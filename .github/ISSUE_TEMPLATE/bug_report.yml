@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a problem with browsing, indexing, installation, or terminal rendering.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, use [private reporting](https://github.com/lmilojevicc/brewnicle/security/advisories/new).
+        Remove credentials and private details from logs or screenshots. Do not upload full caches or Git history directories.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS and architecture, installation method (Homebrew HEAD, Go, source, or release binary), and Brewnicle version or commit if known. Include Git and Homebrew versions when relevant.
+      placeholder: |
+        OS / architecture:
+        Installation method / version or commit:
+        Git version (for indexing issues):
+        Homebrew version (for installation issues):
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the package name, filter, or action involved. For catalog or indexing problems, note whether this was a first launch, refresh, or offline session.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: terminal
+    attributes:
+      label: Terminal details (for rendering issues)
+      description: Include terminal app/version, dimensions in columns × rows, whether NO_COLOR is set, and any terminal multiplexer. A redacted screenshot can help.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant errors or logs
+      description: Paste only the relevant excerpt after removing private details.
+      render: text

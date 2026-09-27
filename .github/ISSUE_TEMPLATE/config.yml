@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/lmilojevicc/brewnicle/security/advisories/new
+    about: Disclose vulnerabilities privately, not in public issues.

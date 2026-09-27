@@ -10,7 +10,7 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 )
 
 func TestFetchNormalize(t *testing.T) {

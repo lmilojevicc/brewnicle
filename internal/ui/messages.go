@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"github.com/milo/brewnicle/internal/domain"
-	"github.com/milo/brewnicle/internal/refresh"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/refresh"
 )
 
 type RefreshEvent struct {

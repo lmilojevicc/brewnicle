@@ -3,7 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 	"reflect"
 	"testing"
 )

@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 )
 
 var identifierRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+_.@-]*$`)

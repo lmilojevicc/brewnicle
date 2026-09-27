@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/milo/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
 )
 
 const (

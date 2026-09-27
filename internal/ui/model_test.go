@@ -7,9 +7,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/milo/brewnicle/internal/domain"
-	"github.com/milo/brewnicle/internal/platform"
-	"github.com/milo/brewnicle/internal/refresh"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/platform"
+	"github.com/lmilojevicc/brewnicle/internal/refresh"
 )
 
 func uiPkgs() []domain.Package {

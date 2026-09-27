@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milo/brewnicle/internal/catalog"
-	"github.com/milo/brewnicle/internal/domain"
-	"github.com/milo/brewnicle/internal/history"
-	"github.com/milo/brewnicle/internal/store"
+	"github.com/lmilojevicc/brewnicle/internal/catalog"
+	"github.com/lmilojevicc/brewnicle/internal/domain"
+	"github.com/lmilojevicc/brewnicle/internal/history"
+	"github.com/lmilojevicc/brewnicle/internal/store"
 )
 
 type fakeCat struct{ err error }
