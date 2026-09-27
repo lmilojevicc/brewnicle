@@ -1,8 +1,17 @@
-# brewnicle
+<h1 align="center">brewnicle</h1>
 
-A fast interactive terminal UI for discovering newly added official Homebrew packages with upstream first-add dates, full-text search, filtering, and installation.
+<p align="center">A fast interactive terminal UI for discovering newly added official Homebrew packages with upstream first-add dates, full-text search, filtering, and installation.</p>
 
-![Brewnicle terminal interface showing package list, details, and status](assets/cover-image.png)
+<p align="center">
+  <a href="https://github.com/lmilojevicc/brewnicle/releases"><img alt="Release" src="https://shieldcn.dev/github/release/lmilojevicc/brewnicle.svg?variant=outline" /></a>
+  <a href="https://github.com/lmilojevicc/brewnicle/actions/workflows/ci.yml"><img alt="CI status" src="https://shieldcn.dev/github/ci/lmilojevicc/brewnicle.svg?workflow=ci.yml&amp;branch=main&amp;variant=outline" /></a>
+  <a href="https://github.com/lmilojevicc/brewnicle/graphs/contributors"><img alt="GitHub contributors" src="https://shieldcn.dev/github/contributors/lmilojevicc/brewnicle.svg?variant=outline" /></a>
+  <a href="https://github.com/lmilojevicc/brewnicle/blob/main/LICENSE"><img alt="License" src="https://shieldcn.dev/github/license/lmilojevicc/brewnicle.svg?variant=outline" /></a>
+</p>
+
+<p align="center">
+  <img src="assets/cover-image.png" alt="Brewnicle terminal interface showing package list, details, and status" />
+</p>
 
 When you run `brew update`, Homebrew announces packages added since your last local update, but discards that history as soon as the terminal scrolls. Brewnicle pairs the official Homebrew formula and cask catalogs with upstream Git commit histories to provide a searchable chronicle of packages added over the last 7 days, 30 days, 90 days, 1 year, or all time.
 
@@ -33,7 +42,13 @@ When you run `brew update`, Homebrew announces packages added since your last lo
 
 ## Installation
 
-Install the latest binary using Go:
+Install with Homebrew:
+
+```sh
+brew install lmilojevicc/tap/brewnicle
+```
+
+Or install the binary using Go:
 
 ```sh
 go install github.com/milo/brewnicle/cmd/brewnicle@latest
