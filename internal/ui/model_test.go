@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -523,7 +524,7 @@ func TestProvisionalFailureRetainsBrowsingAndRetry(t *testing.T) {
 	}
 }
 
-func TestExactCompletionPreservesProvisionalSearchTypeAndSelection(t *testing.T) {
+func TestExactCompletionPreservesProvisionalSearchTypeSortAndSelection(t *testing.T) {
 	m := New(nil, true, false, true, Dependencies{})
 	m.width, m.height = 100, 20
 	m.refreshing = true
@@ -533,6 +534,9 @@ func TestExactCompletionPreservesProvisionalSearchTypeAndSelection(t *testing.T)
 	m = update(t, m, runeKey("j"))
 	m = update(t, m, runeKey("/"))
 	m = update(t, m, runeKey("tool"))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = update(t, m, runeKey("S"))
+	m = update(t, m, runeKey("/"))
 	selected, ok := m.selectedPackage()
 	if !ok || selected.Name != "beta" {
 		t.Fatal(selected, ok)
@@ -545,7 +549,123 @@ func TestExactCompletionPreservesProvisionalSearchTypeAndSelection(t *testing.T)
 	}
 	m = update(t, m, refreshEventMsg{Event: RefreshEvent{Done: true, Packages: exact}})
 	got, ok := m.selectedPackage()
-	if !ok || got.Key() != selected.Key() || m.State() != StateSearch || m.KindFilter() != domain.KindFilterFormula || m.query != "tool" || m.Dates() != DatesReady {
+	if !ok || got.Key() != selected.Key() || m.State() != StateSearch || m.KindFilter() != domain.KindFilterFormula || m.query != "tool" || m.Dates() != DatesReady || m.SortMode() != domain.SortNameZA {
 		t.Fatal(got, ok, m.State(), m.KindFilter(), m.query, m.Dates())
+	}
+}
+
+func TestSortModeCyclingPreservesIdentityAndSource(t *testing.T) {
+	packages := uiPkgs()
+	original := append([]domain.Package(nil), packages...)
+	m := New(packages, false, false, true, Dependencies{})
+	if m.SortMode() != domain.SortNewest {
+		t.Fatal("default sort", m.SortMode())
+	}
+	m = update(t, m, runeKey("5"))
+	m = update(t, m, runeKey("j"))
+	selected, _ := m.selectedPackage()
+	for _, tc := range []struct {
+		key   string
+		mode  domain.SortMode
+		names string
+	}{
+		{"s", domain.SortOldest, "font-new,app,second,new,unknown"},
+		{"s", domain.SortNameAZ, "app,font-new,new,second,unknown"},
+		{"s", domain.SortNameZA, "unknown,second,new,font-new,app"},
+		{"s", domain.SortNewest, "new,second,app,font-new,unknown"},
+		{"S", domain.SortNameZA, "unknown,second,new,font-new,app"},
+		{"S", domain.SortNameAZ, "app,font-new,new,second,unknown"},
+		{"S", domain.SortOldest, "font-new,app,second,new,unknown"},
+		{"S", domain.SortNewest, "new,second,app,font-new,unknown"},
+	} {
+		m = update(t, m, runeKey(tc.key))
+		names := make([]string, len(m.Visible()))
+		for i, p := range m.Visible() {
+			names[i] = p.Name
+		}
+		if m.SortMode() != tc.mode || strings.Join(names, ",") != tc.names {
+			t.Fatalf("sort %s: %s %v", tc.key, m.SortMode(), names)
+		}
+		if got, _ := m.selectedPackage(); got.Key() != selected.Key() {
+			t.Fatalf("%s lost selected identity: %s", tc.mode, got.Key())
+		}
+		if !reflect.DeepEqual(packages, original) {
+			t.Fatal("sorting mutated source packages")
+		}
+	}
+	// Identical names of different kinds must retain the selected Key, not name.
+	m = New([]domain.Package{packages[0], {Name: packages[0].Name, Kind: domain.KindCask, AddedAt: packages[1].AddedAt}}, false, false, true, Dependencies{})
+	m = update(t, m, runeKey("j"))
+	selected, _ = m.selectedPackage()
+	m = update(t, m, runeKey("s"))
+	if got, _ := m.selectedPackage(); got.Key() != selected.Key() {
+		t.Fatal("same-name selection changed kind")
+	}
+}
+
+func TestSortModeCompositionRefreshAndSessionReset(t *testing.T) {
+	m := New(uiPkgs(), false, false, true, Dependencies{})
+	m = update(t, m, runeKey("s"))
+	m = update(t, m, runeKey("f"))
+	m = update(t, m, runeKey("1"))
+	if m.Visible()[0].Name != "second" || len(m.Visible()) != 2 {
+		t.Fatal(m.Visible())
+	}
+	m = update(t, m, runeKey("/"))
+	m = update(t, m, runeKey("other"))
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.Visible()) != 1 || m.SortMode() != domain.SortOldest {
+		t.Fatal(m.Visible(), m.SortMode())
+	}
+	selected, _ := m.selectedPackage()
+	for _, event := range []RefreshEvent{
+		{SnapshotReady: true, Packages: uiPkgs()},
+		{CatalogReady: true, Packages: uiPkgs()},
+		{Done: true, Packages: uiPkgs()},
+	} {
+		m = update(t, m, refreshEventMsg{Event: event})
+		got, _ := m.selectedPackage()
+		if got.Key() != selected.Key() || m.SortMode() != domain.SortOldest || m.KindFilter() != domain.KindFilterFormula || m.query != "other" {
+			t.Fatal("refresh lost browsing preferences", got, m.SortMode(), m.KindFilter(), m.query)
+		}
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if len(m.Visible()) != 2 || m.Visible()[0].Name != "second" {
+		t.Fatal("query clear lost sort", m.Visible())
+	}
+	if New(uiPkgs(), false, false, true, Dependencies{}).SortMode() != domain.SortNewest {
+		t.Fatal("sort persisted across sessions")
+	}
+}
+
+func TestSortModeKeyOwnership(t *testing.T) {
+	m := New(uiPkgs(), false, false, true, Dependencies{})
+	m = update(t, m, runeKey("/"))
+	m = update(t, m, runeKey("s"))
+	m = update(t, m, runeKey("S"))
+	if m.input.Value() != "sS" || m.SortMode() != domain.SortNewest {
+		t.Fatal("search must own literal s/S")
+	}
+	for _, state := range []State{StateConfirm, StateHelp, StateFatal, StateRunningInstall} {
+		m.state = state
+		for _, key := range []string{"s", "S"} {
+			m = update(t, m, runeKey(key))
+			if m.State() != state || m.SortMode() != domain.SortNewest {
+				t.Fatal("modal did not own", state, key)
+			}
+		}
+	}
+	m.state = StateBrowse
+	m = update(t, m, tea.WindowSizeMsg{Width: 49, Height: 11})
+	m = update(t, m, runeKey("s"))
+	if m.SortMode() != domain.SortNewest {
+		t.Fatal("too-small layout did not own s")
+	}
+	m = update(t, m, tea.WindowSizeMsg{Width: 50, Height: 12})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = update(t, m, runeKey("s"))
+	if m.State() != StateNarrowDetail || m.SortMode() != domain.SortOldest {
+		t.Fatal("narrow details did not sort")
 	}
 }

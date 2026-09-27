@@ -109,6 +109,8 @@ HOME="$TMP_HOME" XDG_CACHE_HOME="$TMP_HOME/cache" /tmp/brewnicle-smoke
 - **Terminal Too Small (< 50×12):** Displays a minimal "Terminal too small" notice; `q` quits.
 - **Interactive Navigation:** Centered list selection with boundary clamping (`j`/`k`, `↑`/`↓`).
 - **Filtering & Search:** Real-time search (`/`), range cycling (`1`–`5`, `Tab`), and kind filtering (`f`/`F`).
+- **Sorting:** `s` / `S` cycles Newest (launch default), Oldest, Name A–Z, Name Z–A forward/back. Check the header, retained package selection, and composition with search/type/range. Unknown dates stay last in both date modes; ties use name then kind. Sorting survives refresh and catalog-to-exact indexing, but not relaunch. In search, `s` and `S` remain literal input.
+- **NO_COLOR:** Repeat wide and minimum-size sorting/search/help checks with `NO_COLOR=1`; labels and selection remain visible without color.
 - **Help Overlay:** Toggle help panel (`?`), dismiss with `?` or `Esc`.
 - **Install Confirmation:** Press `i` to open the confirmation modal; test cancel (`Esc` or `n`). *(Do not confirm real installs during automated testing.)*
 

@@ -75,6 +75,16 @@ func TestGoldenViews(t *testing.T) {
 		return update(t, m, tea.WindowSizeMsg{Width: 90, Height: 24})
 	}
 	cases["wide-rich"] = richBase()
+	for _, mode := range domain.SortModes {
+		m := edgeBase(100, 16)
+		m.changeSortMode(mode)
+		cases["sort-"+string(mode)] = m
+	}
+	sortNarrow := base(50, 12)
+	sortNarrow.changeSortMode(domain.SortNameZA)
+	cases["sort-narrow"] = sortNarrow
+	sortNarrow = update(t, sortNarrow, runeKey("?"))
+	cases["help-min"] = sortNarrow
 	search := base(100, 16)
 	search = update(t, search, runeKey("/"))
 	cases["search"] = search

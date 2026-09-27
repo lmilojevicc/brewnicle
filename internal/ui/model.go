@@ -51,6 +51,7 @@ type Dependencies struct {
 type Model struct {
 	packages, visible   []domain.Package
 	rangeValue          domain.Range
+	sortMode            domain.SortMode
 	kindFilter          domain.KindFilter
 	query               string
 	selected            int
@@ -107,6 +108,7 @@ func New(packages []domain.Package, bootstrap, stale, noColor bool, deps Depende
 		packages:            packages,
 		rangeValue:          domain.DefaultRange,
 		kindFilter:          domain.DefaultKindFilter,
+		sortMode:            domain.DefaultSortMode,
 		state:               state,
 		input:               in,
 		deps:                deps,
@@ -137,6 +139,9 @@ func (m *Model) applyFilter(keep string) {
 		rangeValue = domain.RangeAll
 	}
 	m.visible = domain.Filter(m.packages, rangeValue, m.kindFilter, m.query, m.now())
+	if m.sortMode != domain.DefaultSortMode {
+		domain.SortPackages(m.visible, m.sortMode)
+	}
 	m.selected = 0
 	for i, p := range m.visible {
 		if p.Key() == old {
@@ -183,6 +188,7 @@ func (m *Model) cancelMissingConfirmation(packages []domain.Package) bool {
 	return true
 }
 
+func (m Model) SortMode() domain.SortMode     { return m.sortMode }
 func (m Model) Range() domain.Range           { return m.rangeValue }
 func (m Model) KindFilter() domain.KindFilter { return m.kindFilter }
 func (m Model) Refreshing() bool              { return m.refreshing }

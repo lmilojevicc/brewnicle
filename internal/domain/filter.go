@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"sort"
 	"strings"
 	"time"
 )
@@ -87,22 +86,7 @@ func Filter(packages []Package, r Range, kindFilter KindFilter, query string, no
 		}
 		out = append(out, p)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		if a.AddedAt == nil && b.AddedAt != nil {
-			return false
-		}
-		if a.AddedAt != nil && b.AddedAt == nil {
-			return true
-		}
-		if a.AddedAt != nil && b.AddedAt != nil && !a.AddedAt.Equal(*b.AddedAt) {
-			return a.AddedAt.After(*b.AddedAt)
-		}
-		if a.Name != b.Name {
-			return a.Name < b.Name
-		}
-		return a.Kind < b.Kind
-	})
+	SortPackages(out, DefaultSortMode)
 	return out
 }
 

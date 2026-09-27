@@ -1,5 +1,5 @@
 ╭────────────────────────────────────────────────────────────────────────────────────────╮
-│brewnicle   7d   30d   90d   1y   [all]   type:all                                   4/4│
+│brewnicle  sort:Newest  7d   30d   90d   1y   [all]  type:all                        4/4│
 ╰────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ packages ─────────────────────────────────────╮ ╭─ font-jetbrains-mono-nerd-font ─────╮
 │  kubernetes-cli                 cask     3d    │ │font-jetbrains-mono-nerd-font  [font]│

@@ -1,0 +1,16 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│brewnicle  sort:Oldest  7d   30d   90d   1y   [all]  type:all                                  4/4│
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ packages ───────────────────────────────────────────╮ ╭─ kubernetes-cli ────────────────────────╮
+│  mongodb-community              formula  1y          │ │kubernetes-cli  [cask]                   │
+│  font-jetbrains-mono-nerd-font  font     4mo         │ │2026-08-03 · 3 days ago                  │
+│› kubernetes-cli                 cask     3d          │ │                                         │
+│  terraform                      formula  ?           │ │CLI                                      │
+│                                                      │ │                                         │
+│                                                      │ │homepage   Unavailable                   │
+│                                                      │ │install    brew install --cask           │
+│                                                      │ │           kubernetes-cli                │
+│                                                      │ │                                         │
+│                                                      │ │                                         │
+╰──────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────╯
+  ↑/↓ move  f type  / search  o homepage  i install  r refresh  ? help  q quit

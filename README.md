@@ -74,6 +74,7 @@ go run ./cmd/brewnicle
 | `1` – `5` | Select time range (`7d`, `30d`, `90d`, `1y`, `all`) |
 | `Tab` / `Shift+Tab` | Cycle time range forward / backward |
 | `f` / `F` | Cycle package type forward / backward (`all`, `formula`, `cask`, `font`) |
+| `s` / `S` | Cycle sort forward / backward (Newest, Oldest, Name A–Z, Name Z–A; session-only) |
 | `/` | Search package name and description |
 | `Esc` | Clear search, dismiss modal, or exit help overlay |
 | `o` | Open package homepage in browser |
