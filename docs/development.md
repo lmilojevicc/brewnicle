@@ -153,7 +153,9 @@ To ensure consistency when multiple Brewnicle processes run concurrently:
 ### 4.5 Cache Boundaries & Symlink Containment
 
 Cache directory resolution (`internal/refresh/paths.go`):
-- Canonicalizes cache paths using `filepath.EvalSymlinks`.
+- An explicit root passed to `ResolvePaths` takes precedence. Otherwise, macOS uses `$XDG_CACHE_HOME/brewnicle` when `XDG_CACHE_HOME` is absolute and nonempty, falling back to `$HOME/Library/Caches/brewnicle` for unset, empty, or relative values. Other platforms retain Go's `os.UserCacheDir()` behavior with `/brewnicle` appended.
+- `index.db` (including SQLite sidecars and temporary publications), `git/`, and `refresh.lock` share the resolved root. Changing roots does not migrate or delete existing caches.
+- Canonicalizes the default cache parent using `filepath.EvalSymlinks`.
 - Verifies that neither the cache directory nor its parent directory is a symbolic link.
 - Git cache operations strictly validate paths before execution to prevent directory traversal or symlink redirection attacks.
 
