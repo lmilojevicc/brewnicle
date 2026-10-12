@@ -1,0 +1,12 @@
+╭─ help ─────────────────────────────────────────╮
+│↑/↓ or j/k  move selection                      │
+│1–5  time range  ·  tab cycle                   │
+│f/F  package type forward/back                  │
+│s/S  sort forward/back                          │
+│/  search name and description                  │
+│o  open homepage  ·  i  install                 │
+│r  refresh                                      │
+│enter  details (narrow terminals)               │
+│? or esc  close help                            │
+│q  quit                                         │
+╰────────────────────────────────────────────────╯

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -42,15 +43,46 @@ type Cache struct {
 }
 
 func (c *Cache) PrepareAll(ctx context.Context, previous State, progress ProgressFunc) (Prepared, error) {
-	var prepared Prepared
 	state := CloneState(previous)
-	for i, repoKind := range []RepoKind{RepoCore, RepoCask} {
-		update, err := c.prepareRepo(ctx, repoKind, state.Repo(repoKind), progress, false)
-		if err != nil {
-			return Prepared{}, err
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Each worker owns one repository and one result slot. Serialize progress
+	// delivery because callers may update a single UI from the callback.
+	var progressMu sync.Mutex
+	var report ProgressFunc
+	if progress != nil {
+		report = func(detail string) {
+			progressMu.Lock()
+			defer progressMu.Unlock()
+			progress(detail)
 		}
-		prepared.Updates[i] = update
-		state.SetRepo(repoKind, update.State)
+	}
+	var updates [2]RepoUpdate
+	var errs [2]error
+	var workers sync.WaitGroup
+	for i, kind := range [...]RepoKind{RepoCore, RepoCask} {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			updates[i], errs[i] = c.prepareRepo(ctx, kind, state.Repo(kind), report, false)
+			if errs[i] != nil {
+				cancel()
+			}
+		}()
+	}
+	// A failed worker may leave a reusable bootstrap checkpoint. Do not let
+	// another refresh enter the cache until both workers have stopped.
+	workers.Wait()
+	if err := errors.Join(errs[:]...); err != nil {
+		return Prepared{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Prepared{}, err
+	}
+	prepared := Prepared{Updates: updates}
+	for i, kind := range [...]RepoKind{RepoCore, RepoCask} {
+		state.SetRepo(kind, updates[i].State)
 	}
 	prepared.State = state
 	if !prepared.State.CompleteCurrent() && c.remotes == nil {
@@ -927,10 +959,14 @@ func secureDirectoryWithin(boundary, target string) (string, error) {
 		current = filepath.Join(current, part)
 		info, err = os.Lstat(current)
 		if os.IsNotExist(err) {
-			if err = os.Mkdir(current, 0700); err != nil {
+			if err = os.Mkdir(current, 0700); err == nil {
+				continue
+			} else if !os.IsExist(err) {
 				return "", err
 			}
-			continue
+			// Another repository worker may have created this component.
+			// Validate it just like any existing path before proceeding.
+			info, err = os.Lstat(current)
 		}
 		if err != nil {
 			return "", err

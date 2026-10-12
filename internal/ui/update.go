@@ -191,6 +191,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.changeKindFilter(domain.CycleKindFilter(m.kindFilter, 1))
 	case "F":
 		m.changeKindFilter(domain.CycleKindFilter(m.kindFilter, -1))
+	case "s":
+		m.changeSortMode(domain.CycleSortMode(m.sortMode, 1))
+	case "S":
+		m.changeSortMode(domain.CycleSortMode(m.sortMode, -1))
 	case "/":
 		m.state = StateSearch
 		m.input.Focus()
@@ -357,6 +361,11 @@ func (m *Model) changeKindFilter(next domain.KindFilter) {
 	}
 	m.kindFilter = next
 	m.applyFilter(keep)
+}
+
+func (m *Model) changeSortMode(next domain.SortMode) {
+	m.sortMode = next
+	m.applyFilter("")
 }
 
 func (m Model) updateSearch(k tea.KeyMsg) (tea.Model, tea.Cmd) {

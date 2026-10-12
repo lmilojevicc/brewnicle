@@ -18,10 +18,10 @@ const (
 	NarrowMinHeight     = 12
 	emptyResultsMessage = "No matches: / search · f type · 5 all"
 
-	// Wide and narrow layouts spend identical chrome: a three-line header box
-	// (top border, one content line, bottom border), a body with a top and a
-	// bottom border, and a one-line footer, so both share a row capacity of
-	// height minus six. The two body border lines are called out here.
+	// Wide and narrow layouts share a boxed header, a body with top and
+	// bottom borders, and a one-line footer. The header usually has one
+	// content line, or two when search or indicators need more room. The
+	// two body border lines are called out here.
 	bodyBorderLines = 2
 
 	// A list row is marker(2) + name + two-cell gaps + kind(7) + age(3) +
@@ -60,15 +60,15 @@ func isNarrowLayout(width, height int) bool {
 }
 
 // searchInputWidth reserves the boxed-header space before the search field so
-// the brand, the type label, the Search: prompt, the one-cell gap, and the
+// the brand, sort and type labels, the Search: prompt, the gap, and the
 // right-hand count/indicator cluster all fit on a single header line. The
 // cluster width is read from the current model state because its indicators
 // are never truncated, so the field shrinks as the cluster grows.
 func (m Model) searchInputWidth() int {
-	right := lipgloss.Width(m.headerRight(makeStyles(m.noColor), headerRightMaxWidth(m.width)))
+	right := lipgloss.Width(m.headerRight(makeStyles(m.noColor), m.headerRightMaxWidth()))
 	// The constant three is the focused input's cursor cell plus the minimum
 	// gap before the right-hand cluster.
-	available := m.width - 2 - lipgloss.Width("brewnicle") - 3 - lipgloss.Width("type:all") - 3 - lipgloss.Width("Search: ") - 3 - right
+	available := m.width - 2 - lipgloss.Width("brewnicle") - 2 - lipgloss.Width(m.sortLabel()) - 2 - lipgloss.Width("type:"+m.kindFilter.String()) - 2 - lipgloss.Width("Search: ") - 3 - right
 	if available < 8 {
 		return 8
 	}
@@ -79,10 +79,12 @@ func (m Model) searchInputWidth() int {
 }
 
 // headerRightMaxWidth caps the right-hand header cluster so its indicators
-// never crowd the brand out of the box entirely.
-func headerRightMaxWidth(width int) int {
-	return max(0, width-2-lipgloss.Width("brewnicle")-1)
+// never crowd the brand and active sort out of the box entirely.
+func (m Model) headerRightMaxWidth() int {
+	return max(0, m.width-2-lipgloss.Width("brewnicle")-2-lipgloss.Width(m.sortLabel())-1)
 }
+
+func (m Model) sortLabel() string { return "sort:" + m.sortMode.String() }
 
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
@@ -134,24 +136,30 @@ func (m Model) headerLines() []string {
 func (m Model) header() string { return strings.Join(m.headerLines(), "\n") }
 
 func (m Model) headerContent(s styles, inner int) []string {
-	right := m.headerRight(s, headerRightMaxWidth(m.width))
+	right := m.headerRight(s, m.headerRightMaxWidth())
 	if m.state == StateSearch {
 		input := m.input
 		input.Width = m.searchInputWidth()
-		left := s.title.Render("brewnicle") + "   " + m.kindFilterLabel(s) + "   " + input.View()
+		prefix := s.title.Render("brewnicle") + "  " + s.accent.Render(m.sortLabel()) + "  "
+		left := prefix + m.kindFilterLabel(s) + "  " + input.View()
 		if lipgloss.Width(left)+2+lipgloss.Width(right) <= inner {
 			return []string{alignHeader(left, right, inner)}
 		}
 		// At narrow widths the focused input keeps the first content line
 		// while count, stale, and refresh state keep an untruncated line.
-		return []string{truncate(left, inner), truncate(right, inner)}
+		// Drop the type label to keep the active sort and editable text visible.
+		input.Width = min(40, max(8, inner-lipgloss.Width(prefix)-lipgloss.Width(input.Prompt)-1))
+		return []string{prefix + input.View(), right}
+	}
+	if lipgloss.Width("brewnicle  "+m.sortLabel())+1+lipgloss.Width(right) > inner {
+		return []string{m.browseHeaderLine(s, inner, ""), right}
 	}
 	return []string{m.browseHeaderLine(s, inner, right)}
 }
 
 // browseHeaderLine drops whole range tabs from the right, then the type label,
 // and finally the active range tab, when the header box cannot hold brand,
-// tabs, type, and the right indicators. Inactive tabs are dropped before the
+// sort, tabs, type, and the right indicators. Inactive tabs are dropped before the
 // active one and the type label is dropped before the active tab so the header
 // never shows a range set with none active; the count and stale/refreshing
 // indicators are never truncated.
@@ -167,7 +175,7 @@ func (m Model) browseHeaderLine(s styles, inner int, right string) string {
 	rightWidth := lipgloss.Width(right)
 	withType := true
 	build := func() string {
-		segments := []string{brand}
+		segments := []string{brand, s.accent.Render(m.sortLabel())}
 		if len(tabs) > 0 {
 			segments = append(segments, strings.Join(tabs, "   "))
 		}
@@ -177,7 +185,7 @@ func (m Model) browseHeaderLine(s styles, inner int, right string) string {
 		if withType {
 			segments = append(segments, typeLabel)
 		}
-		return strings.Join(segments, "   ")
+		return strings.Join(segments, "  ")
 	}
 	for {
 		left := build()
@@ -550,6 +558,7 @@ func (m Model) helpView() string {
 		"↑/↓ or j/k  move selection",
 		"1–5  time range  ·  tab cycle",
 		s.accent.Render("f/F  package type forward/back"),
+		s.accent.Render("s/S  sort forward/back"),
 		s.link.Render("/  search name and description"),
 		s.link.Render("o  open homepage") + "  ·  " + s.installPrompt.Render("i  install"),
 		s.success.Render("r  refresh"),

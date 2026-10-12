@@ -591,13 +591,18 @@ func TestNarrowMinDetailKeepsHomepageAndInstall(t *testing.T) {
 // TestSearchHeaderFitsRightClusterOnOneLine guards the field-width reservation:
 // the right-hand count cluster used to be ignored, so every search at 76 columns
 // or narrower fell back to the four-line header and lost a body row.
+// The active sort now requires a second content line at the minimum width.
 func TestSearchHeaderFitsRightClusterOnOneLine(t *testing.T) {
 	for _, width := range []int{100, 90, 76, 60, 50} {
 		m := New(uiPkgs(), false, false, true, Dependencies{})
 		m = update(t, m, tea.WindowSizeMsg{Width: width, Height: 15})
 		m = update(t, m, runeKey("/"))
-		if got := len(m.headerLines()); got != 3 {
-			t.Fatalf("width %d search header lines = %d want 3:\n%s", width, got, m.header())
+		wantLines := 3
+		if width == 50 {
+			wantLines = 4
+		}
+		if got := len(m.headerLines()); got != wantLines {
+			t.Fatalf("width %d search header lines = %d want %d:\n%s", width, got, wantLines, m.header())
 		}
 	}
 	// With multiple state indicators the four-line fallback remains correct.
@@ -742,5 +747,53 @@ func TestPanelViewKeepsBordersOnShortTerminals(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines[0], "╭") || !strings.HasPrefix(lines[3], "╰") {
 		t.Fatalf("short panel lost a border:\n%s", m.View())
+	}
+}
+
+func TestSortHeaderAndHelpFitResponsiveLayouts(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		for _, size := range []tea.WindowSizeMsg{{Width: 100, Height: 20}, {Width: 90, Height: 16}, {Width: 60, Height: 15}, {Width: 50, Height: 12}} {
+			for _, mode := range domain.SortModes {
+				for _, busy := range []bool{false, true} {
+					m := New(uiPkgs(), false, busy, noColor, Dependencies{})
+					m = update(t, m, size)
+					m.changeSortMode(mode)
+					m.refreshing = busy
+					if busy {
+						m.dates = DatesUnavailable
+					}
+					m.kindFilter = domain.KindFilterFormula
+					for _, state := range []State{StateBrowse, StateSearch, StateNarrowDetail, StateHelp} {
+						m.state = state
+						view := m.View()
+						wants := []string{"sort:" + mode.String()}
+						if state == StateHelp {
+							wants = []string{"s/S  sort forward/back", "? or esc  close help", "q  quit", "f/F  package type"}
+						} else {
+							if busy {
+								wants = append(wants, "STALE", "DATES UNAVAILABLE", "refreshing", "4/5")
+							}
+							if state == StateSearch {
+								wants = append(wants, "Search:")
+							}
+						}
+						for _, want := range wants {
+							if !strings.Contains(view, want) {
+								t.Fatalf("%+v %s state %d missing %q:\n%s", size, mode, state, want, view)
+							}
+						}
+						lines := strings.Split(view, "\n")
+						if len(lines) != size.Height {
+							t.Fatalf("height %d, want %d", len(lines), size.Height)
+						}
+						for _, line := range lines {
+							if lipgloss.Width(line) > size.Width {
+								t.Fatalf("overflow: %q", line)
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 type Paths struct{ Root, Index, Git, Lock string }
@@ -11,9 +12,14 @@ type Paths struct{ Root, Index, Git, Lock string }
 func ResolvePaths(root string) (Paths, error) {
 	var err error
 	if root == "" {
-		root, err = os.UserCacheDir()
-		if err != nil {
-			return Paths{}, err
+		// macOS's native cache lookup ignores XDG_CACHE_HOME.
+		if xdg := os.Getenv("XDG_CACHE_HOME"); runtime.GOOS == "darwin" && filepath.IsAbs(xdg) {
+			root = xdg
+		} else {
+			root, err = os.UserCacheDir()
+			if err != nil {
+				return Paths{}, err
+			}
 		}
 		// The platform cache directory is the trusted boundary. Canonicalize it
 		// once, then create only Brewnicle-owned real directories beneath it.
