@@ -29,6 +29,9 @@ jobs:
   validate:
     needs: guard
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
   package:
     needs: validate
     runs-on: ubuntu-latest
